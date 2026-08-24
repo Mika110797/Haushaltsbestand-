@@ -1,5 +1,14 @@
 (() => {
   const main = document.getElementById('main');
+  // Prevent accidental browser zoom gestures so the installed PWA feels like a native app.
+  // Normal one-finger scrolling stays enabled.
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach(type => {
+    document.addEventListener(type, event => event.preventDefault(), { passive: false });
+  });
+  document.addEventListener('touchmove', event => {
+    if (event.touches && event.touches.length > 1) event.preventDefault();
+  }, { passive: false });
+
   const bottomNav = document.getElementById('bottomNav');
   const logoutBtn = document.getElementById('logoutBtn');
   const toastEl = document.getElementById('toast');

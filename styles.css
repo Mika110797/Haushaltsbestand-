@@ -85,3 +85,6 @@ dialog::backdrop { background:rgba(75,0,40,.38); backdrop-filter:blur(3px); }
   .qty-btn { width:52px; }
   .item-tools { grid-column:1; justify-content:flex-start; }
 }
+
+/* App-like touch behavior: keep normal scrolling, suppress accidental double-tap zoom. */
+button, input, select, textarea, .category-chip, .item-card { touch-action: manipulation; }

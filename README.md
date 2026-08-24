@@ -1,35 +1,21 @@
-# Haushaltsbestand – Version 1
+# Haushaltsbestand v1.3.1
 
-Kleine deutschsprachige PWA für einen gemeinsamen Haushaltsbestand auf iPhone und Android.
+Private PWA für einen gemeinsamen Haushaltsbestand auf iPhone und Android.
 
-## Funktionen
-- Zwei getrennte Benutzerkonten
-- Gemeinsamer Haushalt per 8-stelligem Einladungscode
-- Kategorien und beliebige Haushaltsartikel
-- Exakter Bestand mit großen + / − Buttons
-- Mindestbestand
-- Automatische Einkaufsliste
-- Echtzeit-Synchronisierung über Supabase
-- Installierbar auf dem Homescreen
+## Neu in v1.3
+- ⭐ Favoriten
+- ↩️ Rückgängig nach Bestandsänderungen
+- 🔎 Artikelsuche
+- 📦 optionale Packungsgröße mit „+1 Packung“
+- 📊 Verbrauch der letzten 30 Tage (ab v1.3 erfasste Änderungen)
+- 🔔 deutliche Warnung bei niedrigem Bestand
+- 💗 stärkeres Pink-Design
+- 🧊 Kühlschrank, 🥫 Vorratskammer und 📦 Keller als Standardkategorien; weitere Kategorien bleiben möglich
 
-## Einrichtung
-1. Supabase-Projekt und Datenbank sind bereits eingerichtet und `config.js` ist verbunden.
-2. Die Dateien über einen HTTPS-Webhost bereitstellen (z. B. GitHub Pages, Cloudflare Pages, Netlify oder Vercel).
-3. Auf beiden Handys öffnen und zum Homescreen hinzufügen.
-4. Person 1: Konto anlegen → Haushalt erstellen.
-5. Person 2: eigenes Konto anlegen → Einladungscode eingeben.
+## Technik
+- Supabase Auth und PostgreSQL
+- Row Level Security für Haushaltsdaten
+- Echtzeit-Synchronisierung von Artikeln und Kategorien
+- Installierbar als PWA über GitHub Pages
 
-## Beispiel
-- Katzenfutter Huhn: 24 Stk., Mindestbestand 8
-- Klopapier: 18 Rollen, Mindestbestand 6
-- Cola Zero: 12 Flaschen, Mindestbestand 4
-
-Wenn ein Artikel den Mindestbestand erreicht oder unterschreitet, erscheint er automatisch im Tab „Einkauf“.
-
-
-## Technischer Stand
-- Supabase-Datenbank ist eingerichtet.
-- Row Level Security ist aktiv; anonyme Tabellenzugriffe sind gesperrt.
-- Frontend nutzt den Publishable Key, niemals einen Secret-/Service-Role-Key.
-- Supabase JS ist auf Version 2.112.4 festgesetzt.
-- Noch offen: HTTPS-Hosting der statischen PWA.
+- 📱 App-artiges Touchverhalten: kein versehentliches Pinch- oder Doppeltipp-Zoomen
