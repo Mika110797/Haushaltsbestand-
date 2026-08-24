@@ -17,8 +17,10 @@
   let household = null;
   let categories = [];
   let items = [];
+  let movements = [];
   let activeTab = 'stock';
   let activeCategory = 'all';
+  let searchTerm = '';
   let authMode = 'login';
   let realtimeChannel = null;
 
@@ -26,11 +28,18 @@
     .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
     .replaceAll('"','&quot;').replaceAll("'",'&#039;');
 
-  function toast(message) {
-    toastEl.textContent = message;
+  function toast(message, actionLabel='', actionFn=null) {
+    toastEl.innerHTML = `<span>${esc(message)}</span>${actionLabel ? `<button id="toastAction" type="button">${esc(actionLabel)}</button>` : ''}`;
     toastEl.classList.add('show');
     clearTimeout(toastEl._timer);
-    toastEl._timer = setTimeout(() => toastEl.classList.remove('show'), 2200);
+    if (actionLabel && actionFn) {
+      const btn = document.getElementById('toastAction');
+      if (btn) btn.onclick = async () => {
+        toastEl.classList.remove('show');
+        await actionFn();
+      };
+    }
+    toastEl._timer = setTimeout(() => toastEl.classList.remove('show'), actionLabel ? 5000 : 2400);
   }
 
   function setBusy(button, busy, label='Speichern') {
@@ -58,7 +67,7 @@
     logoutBtn.classList.add('hidden');
     main.innerHTML = `
       <section class="card hero">
-        <h2>Gemeinsamer Bestand</h2>
+        <h2>Gemeinsamer Bestand 💗</h2>
         <p>Melde dich an oder erstelle ein Konto. Danach könnt ihr denselben Haushalt auf iPhone und Android verwenden.</p>
       </section>
       <section class="card">
@@ -155,15 +164,33 @@
     toast('Haushalt verbunden.');
   }
 
+  async function ensureStandardCategories() {
+    const standards = [
+      { name:'Kühlschrank', icon:'🧊' },
+      { name:'Vorratskammer', icon:'🥫' },
+      { name:'Keller', icon:'📦' }
+    ];
+    const normalized = new Map(categories.map(c => [c.name.toLocaleLowerCase('de'), c]));
+    const missing = standards.filter(s => !normalized.has(s.name.toLocaleLowerCase('de')));
+    if (missing.length) {
+      const { error } = await db.from('categories').insert(missing.map(s => ({ household_id: household.id, ...s })));
+      if (error) console.warn('Standardkategorien:', error);
+    }
+  }
+
   async function loadData() {
-    const [catRes, itemRes] = await Promise.all([
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const [catRes, itemRes, movementRes] = await Promise.all([
       db.from('categories').select('*').eq('household_id', household.id).order('created_at'),
-      db.from('items').select('*').eq('household_id', household.id).order('name')
+      db.from('items').select('*').eq('household_id', household.id).order('name'),
+      db.from('stock_movements').select('id,item_id,delta,kind,undo_of,created_at').eq('household_id', household.id).gte('created_at', since).order('created_at', { ascending:false })
     ]);
     if (catRes.error) throw catRes.error;
     if (itemRes.error) throw itemRes.error;
+    if (movementRes.error) throw movementRes.error;
     categories = catRes.data || [];
     items = itemRes.data || [];
+    movements = movementRes.data || [];
   }
 
   function renderApp() {
@@ -180,8 +207,26 @@
     return c ? `${c.icon || '📦'} ${c.name}` : 'Ohne Kategorie';
   }
 
+  function consumption30(itemId) {
+    const undone = new Set(movements.filter(m => m.undo_of).map(m => Number(m.undo_of)));
+    return movements
+      .filter(m => m.item_id === itemId && m.kind === 'change' && m.delta < 0 && !undone.has(Number(m.id)))
+      .reduce((sum, m) => sum + Math.abs(m.delta), 0);
+  }
+
+  function filteredItems() {
+    let result = [...items];
+    if (activeCategory === 'favorites') result = result.filter(i => i.is_favorite);
+    else if (activeCategory !== 'all') result = result.filter(i => i.category_id === activeCategory);
+    const q = searchTerm.trim().toLocaleLowerCase('de');
+    if (q) result = result.filter(i => i.name.toLocaleLowerCase('de').includes(q));
+    result.sort((a,b) => Number(b.is_favorite) - Number(a.is_favorite) || a.name.localeCompare(b.name,'de'));
+    return result;
+  }
+
   function renderStock() {
-    const filtered = activeCategory === 'all' ? items : items.filter(i => i.category_id === activeCategory);
+    const filtered = filteredItems();
+    const lowItems = items.filter(i => i.quantity <= i.min_quantity);
     main.innerHTML = `
       <div class="section-title">
         <h2>Bestand</h2>
@@ -190,26 +235,39 @@
           <button id="addItemBtn" class="primary-btn" type="button">+ Artikel</button>
         </div>
       </div>
+      ${lowItems.length ? `<div class="alert-card">🔔 ${lowItems.length === 1 ? '1 Artikel ist knapp.' : `${lowItems.length} Artikel sind knapp.`}</div>` : ''}
+      <div class="search-wrap"><input id="stockSearch" type="search" placeholder="Artikel suchen …" value="${esc(searchTerm)}" /></div>
       <div class="category-chip-row">
         <button class="category-chip ${activeCategory==='all'?'active':''}" data-cat="all">Alle</button>
+        <button class="category-chip ${activeCategory==='favorites'?'active':''}" data-cat="favorites">⭐ Favoriten</button>
         ${categories.map(c => `<button class="category-chip ${activeCategory===c.id?'active':''}" data-cat="${c.id}">${esc(c.icon || '📦')} ${esc(c.name)}</button>`).join('')}
       </div>
       <div class="item-list">
-        ${filtered.length ? filtered.map(itemCard).join('') : `<div class="card empty">Noch keine Artikel vorhanden.</div>`}
+        ${filtered.length ? filtered.map(itemCard).join('') : `<div class="card empty">Keine passenden Artikel gefunden.</div>`}
       </div>`;
 
     document.getElementById('addCategoryBtn').onclick = openCategoryDialog;
     document.getElementById('addItemBtn').onclick = () => openItemDialog();
+    document.getElementById('stockSearch').oninput = (e) => { searchTerm = e.target.value; renderStock(); document.getElementById('stockSearch')?.focus(); };
     document.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { activeCategory = b.dataset.cat; renderStock(); });
     bindItemButtons();
   }
 
   function itemCard(item) {
     const isLow = item.quantity <= item.min_quantity;
-    return `<article class="item-card" data-item="${item.id}">
+    const used = consumption30(item.id);
+    const pack = Math.max(1, Number(item.package_size || 1));
+    return `<article class="item-card ${item.is_favorite ? 'favorite' : ''}" data-item="${item.id}">
       <div>
-        <div class="item-name">${esc(item.name)}</div>
-        <div class="item-meta">${esc(categoryName(item.category_id))} · Mindestbestand ${item.min_quantity} ${esc(item.unit || '')} ${isLow ? '<span class="low">· nachkaufen</span>' : ''}</div>
+        <div class="item-head">
+          <button class="favorite-btn ${item.is_favorite ? 'active' : ''}" data-favorite="${item.id}" type="button" aria-label="Favorit umschalten">${item.is_favorite ? '★' : '☆'}</button>
+          <div>
+            <div class="item-name">${esc(item.name)}</div>
+            <div class="item-meta">${esc(categoryName(item.category_id))} · Mindestbestand ${item.min_quantity} ${esc(item.unit || '')} ${isLow ? '<span class="low">· 🔔 knapp</span>' : ''}</div>
+            ${pack > 1 ? `<div class="item-meta">📦 1 Packung = ${pack} ${esc(item.unit || '')}</div>` : ''}
+            <div class="consumption">📊 30 Tage: ${used} ${esc(item.unit || '')} verbraucht</div>
+          </div>
+        </div>
       </div>
       <div class="qty-control">
         <button class="qty-btn minus" data-id="${item.id}" type="button" aria-label="Bestand verringern">−</button>
@@ -217,6 +275,7 @@
         <button class="qty-btn plus" data-id="${item.id}" type="button" aria-label="Bestand erhöhen">+</button>
       </div>
       <div class="item-tools">
+        ${pack > 1 ? `<button class="small-btn package-btn" data-pack="${item.id}" type="button">📦 +1 Packung</button>` : ''}
         <button class="small-btn edit" data-id="${item.id}" type="button">Bearbeiten</button>
         <button class="small-btn delete" data-id="${item.id}" type="button">Löschen</button>
       </div>
@@ -226,6 +285,11 @@
   function bindItemButtons() {
     document.querySelectorAll('.minus').forEach(b => b.onclick = () => changeQuantity(b.dataset.id, -1));
     document.querySelectorAll('.plus').forEach(b => b.onclick = () => changeQuantity(b.dataset.id, 1));
+    document.querySelectorAll('[data-pack]').forEach(b => b.onclick = () => {
+      const item = items.find(i => i.id === b.dataset.pack);
+      if (item) changeQuantity(item.id, Math.max(1, Number(item.package_size || 1)));
+    });
+    document.querySelectorAll('[data-favorite]').forEach(b => b.onclick = () => toggleFavorite(b.dataset.favorite));
     document.querySelectorAll('.edit').forEach(b => b.onclick = () => openItemDialog(items.find(i => i.id === b.dataset.id)));
     document.querySelectorAll('.delete').forEach(b => b.onclick = () => deleteItem(b.dataset.id));
   }
@@ -233,14 +297,46 @@
   async function changeQuantity(id, delta) {
     const item = items.find(x => x.id === id);
     if (!item) return;
+    const previous = item.quantity;
     item.quantity = Math.max(0, item.quantity + delta);
     renderApp();
-    const { error } = await db.rpc('change_item_quantity', { p_item_id: id, p_delta: delta });
+    const { data, error } = await db.rpc('change_item_quantity_v3', { p_item_id: id, p_delta: delta });
     if (error) {
-      toast(error.message);
-      await loadData();
+      item.quantity = previous;
       renderApp();
+      return toast(error.message);
     }
+    if (data && typeof data.quantity === 'number') item.quantity = data.quantity;
+    if (data?.movement_id) {
+      const amount = Math.abs(Number(data.delta || delta));
+      const text = Number(data.delta || delta) > 0 ? `+${amount} gebucht.` : `−${amount} gebucht.`;
+      toast(text, 'Rückgängig', () => undoMovement(data.movement_id));
+    }
+    await loadData();
+    renderApp();
+  }
+
+  async function undoMovement(movementId) {
+    const { error } = await db.rpc('undo_quantity_change_v3', { p_movement_id: movementId });
+    if (error) return toast(error.message);
+    await loadData();
+    renderApp();
+    toast('Änderung rückgängig gemacht.');
+  }
+
+  async function toggleFavorite(id) {
+    const item = items.find(i => i.id === id);
+    if (!item) return;
+    const next = !item.is_favorite;
+    item.is_favorite = next;
+    renderApp();
+    const { error } = await db.from('items').update({ is_favorite: next }).eq('id', id);
+    if (error) {
+      item.is_favorite = !next;
+      renderApp();
+      return toast(error.message);
+    }
+    toast(next ? 'Zu Favoriten hinzugefügt. ⭐' : 'Aus Favoriten entfernt.');
   }
 
   async function deleteItem(id) {
@@ -255,10 +351,10 @@
     const lowItems = items.filter(i => i.quantity <= i.min_quantity).sort((a,b) => a.name.localeCompare(b.name,'de'));
     main.innerHTML = `
       <div class="section-title"><h2>Einkaufsliste</h2><span class="badge">automatisch</span></div>
-      <section class="card"><p style="margin:0;color:#525252">Hier erscheint alles, dessen Bestand den eingestellten Mindestbestand erreicht oder unterschritten hat.</p></section>
+      <section class="card"><p style="margin:0;color:#71334f">Hier erscheint alles, dessen Bestand den eingestellten Mindestbestand erreicht oder unterschritten hat.</p></section>
       <div class="item-list">
         ${lowItems.length ? lowItems.map(i => `<article class="item-card">
-          <div><div class="item-name">${esc(i.name)}</div><div class="item-meta">Noch ${i.quantity} ${esc(i.unit || '')} · Ziel mindestens ${i.min_quantity + 1}</div></div>
+          <div><div class="item-name">${esc(i.name)}</div><div class="item-meta">Noch ${i.quantity} ${esc(i.unit || '')} · Mindestbestand ${i.min_quantity}</div></div>
           <div class="qty-control">
             <button class="qty-btn minus" data-id="${i.id}">−</button>
             <div class="qty">${i.quantity}</div>
@@ -273,14 +369,19 @@
   function renderSettings() {
     main.innerHTML = `
       <section class="card">
-        <h2>${esc(household.name)}</h2>
-        <p style="color:#525252">Mit diesem Code kann die zweite Person dem Haushalt beitreten:</p>
+        <h2>${esc(household.name)} 💗</h2>
+        <p style="color:#71334f">Mit diesem Code kann die zweite Person dem Haushalt beitreten:</p>
         <div class="code-box"><span class="code">${esc(household.invite_code)}</span><button id="copyCode" class="secondary-btn">Kopieren</button></div>
       </section>
       <section class="card">
         <h2>Kategorien</h2>
-        ${categories.length ? categories.map(c => `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #eee"><span>${esc(c.icon || '📦')} ${esc(c.name)}</span><button class="small-btn delete-cat" data-id="${c.id}">Löschen</button></div>`).join('') : '<p class="empty">Noch keine Kategorien.</p>'}
+        ${categories.length ? categories.map(c => `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #f7c6dc"><span>${esc(c.icon || '📦')} ${esc(c.name)}</span><button class="small-btn delete-cat" data-id="${c.id}">Löschen</button></div>`).join('') : '<p class="empty">Noch keine Kategorien.</p>'}
         <button id="settingsAddCategory" class="secondary-btn" style="margin-top:12px">+ Kategorie hinzufügen</button>
+      </section>
+      <section class="card">
+        <h2>Neue Testfunktionen</h2>
+        <p class="item-meta">⭐ Favoriten · ↩️ Rückgängig · 🔎 Suche · 📦 Packungsgrößen · 📊 30-Tage-Verbrauch · 🔔 Bestandswarnungen</p>
+        <p class="item-meta">Die Verbrauchsstatistik zählt ab dieser Version neue Bestandsänderungen.</p>
       </section>`;
     document.getElementById('copyCode').onclick = async () => {
       await navigator.clipboard.writeText(household.invite_code);
@@ -307,6 +408,7 @@
     document.getElementById('itemQuantity').value = item?.quantity ?? 1;
     document.getElementById('itemMinimum').value = item?.min_quantity ?? 0;
     document.getElementById('itemUnit').value = item?.unit || 'Stk.';
+    document.getElementById('itemPackageSize').value = item?.package_size || 1;
     const select = document.getElementById('itemCategory');
     select.innerHTML = categories.map(c => `<option value="${c.id}">${esc(c.icon || '📦')} ${esc(c.name)}</option>`).join('');
     select.value = item?.category_id || categories[0].id;
@@ -329,16 +431,28 @@
     if (e.submitter?.value === 'cancel') return;
     e.preventDefault();
     const id = document.getElementById('itemId').value;
+    const desiredQuantity = Number(document.getElementById('itemQuantity').value);
     const payload = {
       household_id: household.id,
       name: document.getElementById('itemName').value.trim(),
       category_id: document.getElementById('itemCategory').value,
-      quantity: Number(document.getElementById('itemQuantity').value),
       min_quantity: Number(document.getElementById('itemMinimum').value),
-      unit: document.getElementById('itemUnit').value.trim() || 'Stk.'
+      unit: document.getElementById('itemUnit').value.trim() || 'Stk.',
+      package_size: Math.max(1, Number(document.getElementById('itemPackageSize').value || 1))
     };
-    const result = id ? await db.from('items').update(payload).eq('id', id) : await db.from('items').insert(payload);
-    if (result.error) return toast(result.error.message);
+
+    if (id) {
+      const old = items.find(i => i.id === id);
+      const result = await db.from('items').update(payload).eq('id', id);
+      if (result.error) return toast(result.error.message);
+      if (old && desiredQuantity !== old.quantity) {
+        const qtyResult = await db.rpc('change_item_quantity_v3', { p_item_id: id, p_delta: desiredQuantity - old.quantity });
+        if (qtyResult.error) return toast(qtyResult.error.message);
+      }
+    } else {
+      const result = await db.from('items').insert({ ...payload, quantity: desiredQuantity });
+      if (result.error) return toast(result.error.message);
+    }
     itemDialog.close();
     await loadData();
     renderApp();
@@ -370,6 +484,8 @@
       await loadHousehold();
       if (!household) return renderNoHousehold();
       await loadData();
+      await ensureStandardCategories();
+      await loadData();
       await subscribeRealtime();
       renderApp();
     } catch (err) {
@@ -394,7 +510,7 @@
 
     db.auth.onAuthStateChange(async (_event, newSession) => {
       session = newSession;
-      household = null; categories = []; items = [];
+      household = null; categories = []; items = []; movements = [];
       if (session) await bootstrapApp(); else renderAuth();
     });
   }

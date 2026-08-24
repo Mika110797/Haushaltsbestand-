@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#db2777" />
+  <meta name="theme-color" content="#e6007e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Haushaltsbestand" />
@@ -34,8 +34,8 @@
   <dialog id="categoryDialog">
     <form method="dialog" id="categoryForm" class="dialog-card">
       <h2>Kategorie hinzufügen</h2>
-      <label>Name<input id="categoryName" maxlength="40" required placeholder="z. B. Katzen" /></label>
-      <label>Emoji<input id="categoryIcon" maxlength="4" placeholder="🐱" /></label>
+      <label>Name<input id="categoryName" maxlength="40" required placeholder="z. B. Bad" /></label>
+      <label>Emoji<input id="categoryIcon" maxlength="4" placeholder="🛁" /></label>
       <div class="dialog-actions">
         <button value="cancel" class="secondary-btn">Abbrechen</button>
         <button id="saveCategoryBtn" value="default" class="primary-btn">Speichern</button>
@@ -47,13 +47,17 @@
     <form method="dialog" id="itemForm" class="dialog-card">
       <h2 id="itemDialogTitle">Artikel hinzufügen</h2>
       <input id="itemId" type="hidden" />
-      <label>Name<input id="itemName" maxlength="80" required placeholder="z. B. Katzenfutter Huhn" /></label>
+      <label>Name<input id="itemName" maxlength="80" required placeholder="z. B. Katzenfutter" /></label>
       <label>Kategorie<select id="itemCategory" required></select></label>
       <div class="form-grid">
         <label>Bestand<input id="itemQuantity" type="number" min="0" step="1" value="1" required /></label>
         <label>Mindestbestand<input id="itemMinimum" type="number" min="0" step="1" value="0" required /></label>
       </div>
-      <label>Einheit<input id="itemUnit" maxlength="20" value="Stk." placeholder="Stk., Rollen, Dosen …" /></label>
+      <div class="form-grid">
+        <label>Einheit<input id="itemUnit" maxlength="20" value="Stk." placeholder="Stk., Rollen, Dosen …" /></label>
+        <label>Packungsgröße<input id="itemPackageSize" type="number" min="1" step="1" value="1" required /></label>
+      </div>
+      <p class="form-hint">Beispiel: Ein Karton Katzenfutter enthält 12 Dosen → Packungsgröße 12.</p>
       <div class="dialog-actions">
         <button value="cancel" class="secondary-btn">Abbrechen</button>
         <button id="saveItemBtn" value="default" class="primary-btn">Speichern</button>
