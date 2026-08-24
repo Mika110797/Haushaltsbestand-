@@ -1,4 +1,4 @@
-# Haushaltsbestand v1.3.1
+# Haushaltsbestand v1.3.2
 
 Private PWA für einen gemeinsamen Haushaltsbestand auf iPhone und Android.
 
@@ -19,3 +19,8 @@ Private PWA für einen gemeinsamen Haushaltsbestand auf iPhone und Android.
 - Installierbar als PWA über GitHub Pages
 
 - 📱 App-artiges Touchverhalten: kein versehentliches Pinch- oder Doppeltipp-Zoomen
+
+
+## Neu in v1.3.2
+- 📊 Statistik als eigener Menüpunkt in der unteren Navigation
+- 30-Tage-Verbrauch aus der Bestandsansicht entfernt, damit sie übersichtlicher bleibt

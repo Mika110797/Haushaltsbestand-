@@ -208,6 +208,7 @@
     document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === activeTab));
     if (activeTab === 'stock') renderStock();
     if (activeTab === 'shopping') renderShopping();
+    if (activeTab === 'stats') renderStatistics();
     if (activeTab === 'settings') renderSettings();
   }
 
@@ -264,7 +265,6 @@
 
   function itemCard(item) {
     const isLow = item.quantity <= item.min_quantity;
-    const used = consumption30(item.id);
     const pack = Math.max(1, Number(item.package_size || 1));
     return `<article class="item-card ${item.is_favorite ? 'favorite' : ''}" data-item="${item.id}">
       <div>
@@ -274,7 +274,6 @@
             <div class="item-name">${esc(item.name)}</div>
             <div class="item-meta">${esc(categoryName(item.category_id))} · Mindestbestand ${item.min_quantity} ${esc(item.unit || '')} ${isLow ? '<span class="low">· 🔔 knapp</span>' : ''}</div>
             ${pack > 1 ? `<div class="item-meta">📦 1 Packung = ${pack} ${esc(item.unit || '')}</div>` : ''}
-            <div class="consumption">📊 30 Tage: ${used} ${esc(item.unit || '')} verbraucht</div>
           </div>
         </div>
       </div>
@@ -375,6 +374,34 @@
     document.querySelectorAll('.plus').forEach(b => b.onclick = () => changeQuantity(b.dataset.id, 1));
   }
 
+  function renderStatistics() {
+    const stats = items
+      .map(item => ({ item, used: consumption30(item.id) }))
+      .filter(entry => entry.used > 0)
+      .sort((a,b) => b.used - a.used || a.item.name.localeCompare(b.item.name, 'de'));
+
+    main.innerHTML = `
+      <div class="section-title"><h2>Statistik</h2><span class="badge">30 Tage</span></div>
+      <section class="card stats-intro">
+        <div class="stats-hero-icon">📊</div>
+        <div>
+          <strong>Verbrauch der letzten 30 Tage</strong>
+          <p>Gezählt werden eure Entnahmen über den Minus-Button. Rückgängig gemachte Buchungen zählen nicht mit.</p>
+        </div>
+      </section>
+      <div class="stats-list">
+        ${stats.length ? stats.map(({item, used}) => `
+          <article class="stat-card">
+            <div>
+              <div class="item-name">${esc(item.name)}</div>
+              <div class="item-meta">${esc(categoryName(item.category_id))}</div>
+            </div>
+            <div class="stat-value"><strong>${used}</strong><span>${esc(item.unit || '')}</span><small>verbraucht</small></div>
+          </article>`).join('') : `
+          <div class="card empty">Noch keine Verbrauchsdaten vorhanden.<br><span class="item-meta">Sobald ihr Bestände mit − verringert, erscheint der Verbrauch hier.</span></div>`}
+      </div>`;
+  }
+
   function renderSettings() {
     main.innerHTML = `
       <section class="card">
@@ -389,8 +416,8 @@
       </section>
       <section class="card">
         <h2>Neue Testfunktionen</h2>
-        <p class="item-meta">⭐ Favoriten · ↩️ Rückgängig · 🔎 Suche · 📦 Packungsgrößen · 📊 30-Tage-Verbrauch · 🔔 Bestandswarnungen</p>
-        <p class="item-meta">Die Verbrauchsstatistik zählt ab dieser Version neue Bestandsänderungen.</p>
+        <p class="item-meta">⭐ Favoriten · ↩️ Rückgängig · 🔎 Suche · 📦 Packungsgrößen · 🔔 Bestandswarnungen</p>
+        <p class="item-meta">📊 Der 30-Tage-Verbrauch hat jetzt einen eigenen Menüpunkt unten.</p>
       </section>`;
     document.getElementById('copyCode').onclick = async () => {
       await navigator.clipboard.writeText(household.invite_code);
