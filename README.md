@@ -1,14 +1,12 @@
-# Haushaltsbestand v1.6.1 – Cache-Fix
+# Haushaltsbestand v1.6.2 – Sortierung
 
-Bitte auf GitHub diese **3 Dateien ersetzen**:
+Bitte auf GitHub diese 3 Dateien ersetzen:
 - index.html
 - app.js
 - sw.js
 
-Warum diesmal index.html?
-Die neue app.js wird jetzt ausdrücklich als `app.js?v=161` geladen. Damit kann die installierte Home-Bildschirm-App nicht mehr so leicht eine alte JavaScript-Datei aus dem Cache weiterverwenden.
-
-Nach erfolgreichem Update erscheint in der Bestandsansicht ganz oben:
-🏠 Vanessa · 🏠 Mika · 🏘️ Alle
-
-Alle bisherigen Daten liegen weiterhin unter Vanessas Haushalt.
+Änderung:
+- Unter „Alle“ werden Artikel zuerst nach Kategorie sortiert.
+- Innerhalb jeder Kategorie werden die Artikel alphabetisch von A–Z sortiert.
+- Favoriten bleiben markiert, beeinflussen unter „Alle“ aber nicht mehr die Reihenfolge.
+- Alle Funktionen aus v1.6.1 bleiben enthalten.

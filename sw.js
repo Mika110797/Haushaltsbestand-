@@ -1,9 +1,9 @@
-const CACHE = 'haushaltsbestand-v161-cache-fix';
+const CACHE = 'haushaltsbestand-v162-sortierung';
 const STATIC = [
   './',
   './index.html',
   './styles.css',
-  './app.js?v=161',
+  './app.js?v=162',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png'

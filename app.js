@@ -404,7 +404,16 @@
     else if (activeCategory !== 'all') result = result.filter(i => i.category_id === activeCategory);
     const q = searchTerm.trim().toLocaleLowerCase('de');
     if (q) result = result.filter(i => i.name.toLocaleLowerCase('de').includes(q));
-    result.sort((a,b) => Number(b.is_favorite) - Number(a.is_favorite) || a.name.localeCompare(b.name,'de'));
+    if (activeCategory === 'all') {
+      result.sort((a,b) => {
+        const categoryA = categoryById(a.category_id)?.name || 'Ohne Kategorie';
+        const categoryB = categoryById(b.category_id)?.name || 'Ohne Kategorie';
+        const categoryCompare = categoryA.localeCompare(categoryB, 'de', { sensitivity:'base' });
+        return categoryCompare || a.name.localeCompare(b.name, 'de', { sensitivity:'base' });
+      });
+    } else {
+      result.sort((a,b) => Number(b.is_favorite) - Number(a.is_favorite) || a.name.localeCompare(b.name,'de'));
+    }
     return result;
   }
 
