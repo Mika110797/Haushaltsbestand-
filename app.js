@@ -37,6 +37,7 @@
   let household = null;
   let categories = [];
   let items = [];
+  let deletedItems = [];
   let movements = [];
   let activeTab = 'stock';
   let activeCategory = 'all';
@@ -247,13 +248,15 @@
     const [catRes, itemRes, movementRes] = await Promise.all([
       db.from('categories').select('*').eq('household_id', household.id).order('created_at'),
       db.from('items').select('*').eq('household_id', household.id).order('name'),
-      db.from('stock_movements').select('id,item_id,delta,kind,undo_of,created_at').eq('household_id', household.id).gte('created_at', since).order('created_at', { ascending:false })
+      db.from('stock_movements').select('id,item_id,delta,kind,undo_of,is_correction,created_at').eq('household_id', household.id).gte('created_at', since).order('created_at', { ascending:false })
     ]);
     if (catRes.error) throw catRes.error;
     if (itemRes.error) throw itemRes.error;
     if (movementRes.error) throw movementRes.error;
     categories = catRes.data || [];
-    items = itemRes.data || [];
+    const allItemRows = itemRes.data || [];
+    items = allItemRows.filter(item => !item.deleted_at);
+    deletedItems = allItemRows.filter(item => item.deleted_at).sort((a,b) => new Date(b.deleted_at) - new Date(a.deleted_at));
     movements = movementRes.data || [];
   }
 
@@ -275,7 +278,7 @@
   function consumption30(itemId) {
     const undone = new Set(movements.filter(m => m.undo_of).map(m => Number(m.undo_of)));
     return movements
-      .filter(m => m.item_id === itemId && m.kind === 'change' && m.delta < 0 && !undone.has(Number(m.id)))
+      .filter(m => m.item_id === itemId && m.kind === 'change' && m.delta < 0 && !m.is_correction && !undone.has(Number(m.id)))
       .reduce((sum, m) => sum + Math.abs(m.delta), 0);
   }
 
@@ -405,11 +408,35 @@
   }
 
   async function deleteItem(id) {
-    if (!confirm('Artikel wirklich löschen?')) return;
-    const { error } = await db.from('items').delete().eq('id', id);
+    const item = items.find(i => i.id === id);
+    if (!item) return;
+    if (!confirm(`„${item.name}“ in den Papierkorb verschieben?`)) return;
+
+    const deletedAt = new Date().toISOString();
+    const { error } = await db.from('items').update({ deleted_at: deletedAt }).eq('id', id);
     if (error) return toast(error.message);
+
+    item.deleted_at = deletedAt;
     items = items.filter(i => i.id !== id);
+    deletedItems = [item, ...deletedItems];
     renderApp();
+    toast('Artikel in den Papierkorb verschoben.', 'Rückgängig', () => restoreDeletedItem(id));
+  }
+
+  async function restoreDeletedItem(id) {
+    const item = deletedItems.find(i => i.id === id);
+    const { error } = await db.from('items').update({ deleted_at: null }).eq('id', id);
+    if (error) return toast(error.message);
+
+    if (item) {
+      item.deleted_at = null;
+      deletedItems = deletedItems.filter(i => i.id !== id);
+      items = [...items, item].sort((a,b) => a.name.localeCompare(b.name, 'de'));
+    } else {
+      await loadData();
+    }
+    renderApp();
+    toast('Artikel wiederhergestellt.');
   }
 
   function openPackageScanner() {
@@ -579,10 +606,20 @@
   }
 
   function renderStatistics() {
+    const undone = new Set(movements.filter(m => m.undo_of).map(m => Number(m.undo_of)));
     const stats = items
       .map(item => ({ item, used: consumption30(item.id) }))
       .filter(entry => entry.used > 0)
       .sort((a,b) => b.used - a.used || a.item.name.localeCompare(b.item.name, 'de'));
+
+    const recent = movements
+      .filter(m => m.kind === 'change' && m.delta < 0 && !undone.has(Number(m.id)))
+      .slice(0, 10);
+
+    const movementItem = movement => [...items, ...deletedItems].find(item => item.id === movement.item_id);
+    const movementTime = value => new Date(value).toLocaleString('de-DE', {
+      day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'
+    });
 
     main.innerHTML = `
       <div class="section-title"><h2>Statistik</h2><span class="badge">30 Tage</span></div>
@@ -590,7 +627,7 @@
         <div class="stats-hero-icon">📊</div>
         <div>
           <strong>Verbrauch der letzten 30 Tage</strong>
-          <p>Gezählt werden eure Entnahmen über den Minus-Button. Rückgängig gemachte Buchungen zählen nicht mit.</p>
+          <p>Nur echte Entnahmen über den Minus-Button zählen. Rückgängig gemachte Buchungen und Bestandskorrekturen werden nicht als Verbrauch gewertet.</p>
         </div>
       </section>
       <div class="stats-list">
@@ -602,17 +639,98 @@
             </div>
             <div class="stat-value"><strong>${used}</strong><span>${esc(item.unit || '')}</span><small>verbraucht</small></div>
           </article>`).join('') : `
-          <div class="card empty">Noch keine Verbrauchsdaten vorhanden.<br><span class="item-meta">Sobald ihr Bestände mit − verringert, erscheint der Verbrauch hier.</span></div>`}
-      </div>`;
+          <div class="card empty">Noch keine Verbrauchsdaten vorhanden.<br><span class="item-meta">Echte Entnahmen über − erscheinen hier.</span></div>`}
+      </div>
+
+      <section class="card" style="margin-top:14px">
+        <h2 style="margin-bottom:4px">Letzte Entnahmen</h2>
+        <p class="item-meta" style="margin-top:0">War ein Minus-Tipp nur ein Versehen, kannst du ihn hier aus der Statistik herausnehmen.</p>
+        ${recent.length ? recent.map(m => {
+          const item = movementItem(m);
+          const name = item?.name || 'Artikel';
+          const unit = item?.unit || '';
+          return `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:11px 0;border-bottom:1px solid #f7c6dc">
+              <div>
+                <strong>${esc(name)} −${Math.abs(Number(m.delta))} ${esc(unit)}</strong>
+                <div class="item-meta">${esc(movementTime(m.created_at))} · ${m.is_correction ? 'Bestandskorrektur' : 'Verbrauch'}</div>
+              </div>
+              <button
+                class="small-btn correction-toggle"
+                type="button"
+                data-movement="${m.id}"
+                data-correction="${m.is_correction ? 'false' : 'true'}">
+                ${m.is_correction ? 'Wieder als Verbrauch zählen' : 'Als Korrektur markieren'}
+              </button>
+            </div>`;
+        }).join('') : '<p class="empty">Noch keine Entnahmen in den letzten 30 Tagen.</p>'}
+      </section>`;
+
+    document.querySelectorAll('.correction-toggle').forEach(button => {
+      button.onclick = () => setMovementCorrection(
+        Number(button.dataset.movement),
+        button.dataset.correction === 'true'
+      );
+    });
+  }
+
+  async function setMovementCorrection(movementId, isCorrection) {
+    const movement = movements.find(m => Number(m.id) === Number(movementId));
+    if (!movement) return;
+    const previous = Boolean(movement.is_correction);
+    movement.is_correction = isCorrection;
+    renderStatistics();
+
+    const { error } = await db.rpc('set_stock_movement_correction_v4', {
+      p_movement_id: movementId,
+      p_is_correction: isCorrection
+    });
+
+    if (error) {
+      movement.is_correction = previous;
+      renderStatistics();
+      return toast(error.message);
+    }
+
+    await loadData();
+    renderApp();
+    toast(isCorrection
+      ? 'Als Korrektur markiert – zählt nicht mehr als Verbrauch.'
+      : 'Buchung zählt wieder als Verbrauch.');
   }
 
   function renderSettings() {
+    const deletedCount = deletedItems.length;
     main.innerHTML = `
       <section class="card">
         <h2>${esc(household.name)} 💗</h2>
         <p style="color:#71334f">Mit diesem Code kann die zweite Person dem Haushalt beitreten:</p>
         <div class="code-box"><span class="code">${esc(household.invite_code)}</span><button id="copyCode" class="secondary-btn">Kopieren</button></div>
       </section>
+
+      <section class="card">
+        <h2>🛟 Datensicherung</h2>
+        <p class="item-meta">Deine normalen Änderungen werden sofort in Supabase gespeichert. Zusätzlich kannst du hier eine eigene Sicherungsdatei erstellen.</p>
+        <div class="actions" style="margin-top:12px">
+          <button id="exportBackup" class="primary-btn" type="button">💾 Backup sichern</button>
+          <button id="importBackup" class="secondary-btn" type="button">📥 Backup wiederherstellen</button>
+        </div>
+        <p class="item-meta" style="margin-bottom:0;margin-top:10px">Gesichert werden Kategorien, Artikel, Bestände, Favoriten, Mindestbestände, Packungsgrößen, Erkennungsbegriffe und der Papierkorb.</p>
+      </section>
+
+      <section class="card">
+        <h2>🗑️ Papierkorb ${deletedCount ? `<span class="badge">${deletedCount}</span>` : ''}</h2>
+        <p class="item-meta">Gelöschte Artikel bleiben hier erhalten, bis du sie wiederherstellst. So verschwindet nichts durch einen versehentlichen Lösch-Tipp.</p>
+        ${deletedCount ? deletedItems.map(item => `
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid #f7c6dc">
+            <div>
+              <strong>${esc(item.name)}</strong>
+              <div class="item-meta">${esc(categoryName(item.category_id))} · ${item.quantity} ${esc(item.unit || '')}</div>
+            </div>
+            <button class="small-btn restore-item" data-id="${item.id}" type="button">Wiederherstellen</button>
+          </div>`).join('') : '<p class="empty" style="padding:14px 0">Papierkorb ist leer. ✨</p>'}
+      </section>
+
       <section class="card">
         <h2>Kategorien</h2>
         ${categories.length ? categories.map(c => `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #f7c6dc"><span>${esc(c.icon || '📦')} ${esc(c.name)}</span><button class="small-btn delete-cat" data-id="${c.id}">Löschen</button></div>`).join('') : '<p class="empty">Noch keine Kategorien.</p>'}
@@ -628,8 +746,167 @@
       await navigator.clipboard.writeText(household.invite_code);
       toast('Einladungscode kopiert.');
     };
+    document.getElementById('exportBackup').onclick = exportBackup;
+    document.getElementById('importBackup').onclick = chooseBackupFile;
     document.getElementById('settingsAddCategory').onclick = openCategoryDialog;
+    document.querySelectorAll('.restore-item').forEach(b => b.onclick = () => restoreDeletedItem(b.dataset.id));
     document.querySelectorAll('.delete-cat').forEach(b => b.onclick = () => deleteCategory(b.dataset.id));
+  }
+
+  function backupSafeCategory(category) {
+    return {
+      id: category.id,
+      name: category.name,
+      icon: category.icon || '📦',
+      created_at: category.created_at || null
+    };
+  }
+
+  function backupSafeItem(item) {
+    return {
+      id: item.id,
+      category_id: item.category_id,
+      name: item.name,
+      quantity: Number(item.quantity || 0),
+      min_quantity: Number(item.min_quantity || 0),
+      unit: item.unit || 'Stk.',
+      created_at: item.created_at || null,
+      updated_at: item.updated_at || null,
+      is_favorite: Boolean(item.is_favorite),
+      package_size: Math.max(1, Number(item.package_size || 1)),
+      recognition_terms: Array.isArray(item.recognition_terms) ? item.recognition_terms : [],
+      deleted_at: item.deleted_at || null
+    };
+  }
+
+  async function exportBackup() {
+    try {
+      const { data: allItems, error } = await db
+        .from('items')
+        .select('*')
+        .eq('household_id', household.id)
+        .order('name');
+      if (error) throw error;
+
+      const backup = {
+        format: 'haushaltsbestand-backup',
+        version: 1,
+        exported_at: new Date().toISOString(),
+        household_name: household.name,
+        categories: categories.map(backupSafeCategory),
+        items: (allItems || []).map(backupSafeItem)
+      };
+
+      const text = JSON.stringify(backup, null, 2);
+      const date = new Date().toISOString().slice(0, 10);
+      const filename = `Haushaltsbestand-Backup-${date}.json`;
+      const file = new File([text], filename, { type:'application/json' });
+
+      if (navigator.share && navigator.canShare?.({ files:[file] })) {
+        await navigator.share({
+          title: 'Haushaltsbestand Backup',
+          text: 'Sicherungsdatei für euren gemeinsamen Haushaltsbestand.',
+          files: [file]
+        });
+        toast('Backup bereit zum Speichern.');
+        return;
+      }
+
+      const url = URL.createObjectURL(file);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      toast('Backup erstellt.');
+    } catch (err) {
+      if (err?.name === 'AbortError') return;
+      console.error(err);
+      toast(err.message || 'Backup konnte nicht erstellt werden.');
+    }
+  }
+
+  function chooseBackupFile() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (file) await importBackupFile(file);
+    };
+    input.click();
+  }
+
+  function validateBackup(raw) {
+    if (!raw || raw.format !== 'haushaltsbestand-backup' || !Array.isArray(raw.categories) || !Array.isArray(raw.items)) {
+      throw new Error('Das ist keine gültige Haushaltsbestand-Sicherungsdatei.');
+    }
+    if (raw.categories.length > 200 || raw.items.length > 5000) {
+      throw new Error('Die Sicherungsdatei ist ungewöhnlich groß.');
+    }
+
+    const categoriesOut = raw.categories.map(category => {
+      if (!category?.id || !category?.name) throw new Error('Eine Kategorie im Backup ist ungültig.');
+      return {
+        id: String(category.id),
+        household_id: household.id,
+        name: String(category.name).trim().slice(0, 40),
+        icon: String(category.icon || '📦').slice(0, 8)
+      };
+    });
+
+    const categoryIds = new Set(categoriesOut.map(c => c.id));
+    const itemsOut = raw.items.map(item => {
+      if (!item?.id || !item?.name || !categoryIds.has(String(item.category_id))) {
+        throw new Error('Ein Artikel im Backup ist ungültig oder verweist auf eine fehlende Kategorie.');
+      }
+      return {
+        id: String(item.id),
+        household_id: household.id,
+        category_id: String(item.category_id),
+        name: String(item.name).trim().slice(0, 80),
+        quantity: Math.max(0, Math.trunc(Number(item.quantity || 0))),
+        min_quantity: Math.max(0, Math.trunc(Number(item.min_quantity || 0))),
+        unit: String(item.unit || 'Stk.').trim().slice(0, 20) || 'Stk.',
+        is_favorite: Boolean(item.is_favorite),
+        package_size: Math.max(1, Math.trunc(Number(item.package_size || 1))),
+        recognition_terms: Array.isArray(item.recognition_terms)
+          ? item.recognition_terms.map(value => String(value).trim()).filter(Boolean).slice(0, 20)
+          : [],
+        deleted_at: item.deleted_at ? String(item.deleted_at) : null
+      };
+    });
+
+    return { categories: categoriesOut, items: itemsOut };
+  }
+
+  async function importBackupFile(file) {
+    try {
+      const raw = JSON.parse(await file.text());
+      const backup = validateBackup(raw);
+      if (!confirm(`Backup vom ${raw.exported_at ? new Date(raw.exported_at).toLocaleString('de-DE') : 'unbekannten Datum'} wiederherstellen?
+
+Vorhandene passende Kategorien und Artikel werden auf den Stand des Backups gesetzt. Neuere, nicht im Backup enthaltene Artikel bleiben sicherheitshalber erhalten.`)) return;
+
+      const catResult = await db.from('categories').upsert(backup.categories, { onConflict:'id' });
+      if (catResult.error) throw catResult.error;
+
+      // Restore in smaller batches so even larger personal backups stay reliable on mobile.
+      for (let i = 0; i < backup.items.length; i += 200) {
+        const batch = backup.items.slice(i, i + 200);
+        const itemResult = await db.from('items').upsert(batch, { onConflict:'id' });
+        if (itemResult.error) throw itemResult.error;
+      }
+
+      await loadData();
+      renderApp();
+      toast(`${backup.items.length} Artikel aus dem Backup wiederhergestellt.`);
+    } catch (err) {
+      console.error(err);
+      toast(err.message || 'Backup konnte nicht wiederhergestellt werden.');
+    }
   }
 
   function openCategoryDialog() {
@@ -703,8 +980,9 @@
       const result = await db.from('items').update(payload).eq('id', id);
       if (result.error) return toast(result.error.message);
       if (old && desiredQuantity !== old.quantity) {
-        const qtyResult = await db.rpc('change_item_quantity_v3', { p_item_id: id, p_delta: desiredQuantity - old.quantity });
+        const qtyResult = await db.rpc('correct_item_quantity_v4', { p_item_id: id, p_quantity: desiredQuantity });
         if (qtyResult.error) return toast(qtyResult.error.message);
+        toast('Bestand korrigiert – zählt nicht als Verbrauch.');
       }
     } else {
       const result = await db.from('items').insert({ ...payload, quantity: desiredQuantity });
@@ -716,7 +994,7 @@
   });
 
   async function deleteCategory(id) {
-    if (items.some(i => i.category_id === id)) return toast('Kategorie enthält noch Artikel.');
+    if ([...items, ...deletedItems].some(i => i.category_id === id)) return toast('Kategorie enthält noch Artikel oder Artikel im Papierkorb.');
     if (!confirm('Kategorie wirklich löschen?')) return;
     const { error } = await db.from('categories').delete().eq('id', id);
     if (error) return toast(error.message);
@@ -731,6 +1009,9 @@
         await loadData(); renderApp();
       })
       .on('postgres_changes', { event:'*', schema:'public', table:'categories' }, async () => {
+        await loadData(); renderApp();
+      })
+      .on('postgres_changes', { event:'*', schema:'public', table:'stock_movements' }, async () => {
         await loadData(); renderApp();
       })
       .subscribe();
@@ -784,7 +1065,7 @@
 
     db.auth.onAuthStateChange(async (_event, newSession) => {
       session = newSession;
-      household = null; categories = []; items = []; movements = [];
+      household = null; categories = []; items = []; deletedItems = []; movements = [];
       if (session) await bootstrapApp(); else renderAuth();
     });
   }

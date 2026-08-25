@@ -1,9 +1,16 @@
-# Haushaltsbestand v1.4.1 – Dialog-Fix
+# Haushaltsbestand v1.5 – Sicherheit & Backup
 
-Kleine Korrektur für iPhone/iOS:
-- „Abbrechen“ bei Kategorie hinzufügen schließt den Dialog sofort.
-- „Abbrechen“ bei Artikel hinzufügen/bearbeiten schließt den Dialog sofort.
-- Leere Pflichtfelder werden beim Abbrechen nicht mehr validiert.
-- Kamera-Beta und alle Funktionen aus v1.4 bleiben unverändert.
+Auf GitHub nur diese Dateien ersetzen:
+- app.js
+- sw.js
 
-Auf GitHub nur `index.html`, `app.js` und `sw.js` ersetzen.
+Neu:
+- Artikel werden beim Löschen nur noch in den Papierkorb verschoben.
+- Papierkorb im Bereich „Haushalt“ mit Wiederherstellen-Funktion.
+- „Backup sichern“ erstellt eine JSON-Sicherungsdatei mit Kategorien, Artikeln, Beständen, Favoriten, Mindestbeständen, Packungsgrößen, Erkennungsbegriffen und Papierkorb.
+- Auf iPhone/iPad wird nach Möglichkeit das Teilen-Menü geöffnet, damit das Backup z. B. in „Dateien“ gespeichert werden kann.
+- „Backup wiederherstellen“ liest diese Sicherungsdatei wieder ein.
+- Wiederherstellung ist absichtlich nicht zerstörerisch: Artikel, die nach dem Backup neu angelegt wurden, bleiben erhalten.
+- Der Statistik-Fix aus v1.4.2 ist bereits enthalten.
+
+Die Supabase-Datenbank wurde bereits passend erweitert.
