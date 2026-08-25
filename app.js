@@ -35,11 +35,13 @@
   let db = null;
   let session = null;
   let household = null;
+  let locations = [];
   let categories = [];
   let items = [];
   let deletedItems = [];
   let movements = [];
   let activeTab = 'stock';
+  let activeLocation = 'all';
   let activeCategory = 'all';
   let searchTerm = '';
   let authMode = 'login';
@@ -229,30 +231,136 @@
     toast('Haushalt verbunden.');
   }
 
+  function locationLabel(location) {
+    if (!location) return 'Unbekannt';
+    if (location.name === 'Vanessas Haushalt') return 'Vanessa';
+    if (location.name === 'Mikas Haushalt') return 'Mika';
+    return location.name.replace(/\s+Haushalt$/i, '');
+  }
+
+  function locationById(id) {
+    return locations.find(location => location.id === id) || null;
+  }
+
+  function categoryById(id) {
+    return categories.find(category => category.id === id) || null;
+  }
+
+  function itemLocationId(item) {
+    return categoryById(item?.category_id)?.location_id || null;
+  }
+
+  function itemBelongsToActiveLocation(item) {
+    return activeLocation === 'all' || itemLocationId(item) === activeLocation;
+  }
+
+  function categoriesForLocation(locationId = activeLocation) {
+    if (locationId === 'all') return categories;
+    return categories.filter(category => category.location_id === locationId);
+  }
+
+  function itemsForActiveLocation(source = items) {
+    return source.filter(item => itemBelongsToActiveLocation(item));
+  }
+
+  function locationSwitcher() {
+    const buttons = [
+      ...locations.map(location => ({
+        id: location.id,
+        label: `🏠 ${locationLabel(location)}`
+      })),
+      { id:'all', label:'🏘️ Alle' }
+    ];
+    return `
+      <section class="card" style="padding:10px 12px;margin-bottom:12px">
+        <div class="item-meta" style="font-weight:800;margin-bottom:7px;color:#8f285a">Wohnung</div>
+        <div class="category-chip-row" style="margin:0">
+          ${buttons.map(button => `<button class="category-chip location-chip ${activeLocation===button.id?'active':''}" data-location="${button.id}" type="button">${esc(button.label)}</button>`).join('')}
+        </div>
+      </section>`;
+  }
+
+  function bindLocationSwitcher() {
+    document.querySelectorAll('[data-location]').forEach(button => {
+      button.onclick = () => {
+        activeLocation = button.dataset.location;
+        activeCategory = 'all';
+        if (household?.id) localStorage.setItem(`haushaltsbestand-location-${household.id}`, activeLocation);
+        renderApp();
+      };
+    });
+  }
+
+  function resolveActiveLocation() {
+    const saved = household?.id ? localStorage.getItem(`haushaltsbestand-location-${household.id}`) : null;
+    if (saved === 'all' || locations.some(location => location.id === saved)) {
+      activeLocation = saved;
+      return;
+    }
+    const vanessa = locations.find(location => location.name === 'Vanessas Haushalt');
+    activeLocation = vanessa?.id || locations[0]?.id || 'all';
+  }
+
+  async function ensureInventoryLocations() {
+    const desired = [
+      { name:'Vanessas Haushalt', icon:'🏠', sort_order:10 },
+      { name:'Mikas Haushalt', icon:'🏠', sort_order:20 }
+    ];
+    const normalized = new Set(locations.map(location => location.name.toLocaleLowerCase('de')));
+    const missing = desired.filter(entry => !normalized.has(entry.name.toLocaleLowerCase('de')));
+    if (!missing.length) return false;
+
+    const { error } = await db.from('inventory_locations').insert(
+      missing.map(entry => ({ household_id: household.id, ...entry }))
+    );
+    if (error) throw error;
+    return true;
+  }
+
   async function ensureStandardCategories() {
     const standards = [
       { name:'Kühlschrank', icon:'🧊' },
       { name:'Vorratskammer', icon:'🥫' },
       { name:'Keller', icon:'📦' }
     ];
-    const normalized = new Map(categories.map(c => [c.name.toLocaleLowerCase('de'), c]));
-    const missing = standards.filter(s => !normalized.has(s.name.toLocaleLowerCase('de')));
+    const missing = [];
+    locations.forEach(location => {
+      standards.forEach(standard => {
+        const exists = categories.some(category =>
+          category.location_id === location.id &&
+          category.name.toLocaleLowerCase('de') === standard.name.toLocaleLowerCase('de')
+        );
+        if (!exists) {
+          missing.push({
+            household_id: household.id,
+            location_id: location.id,
+            ...standard
+          });
+        }
+      });
+    });
+
     if (missing.length) {
-      const { error } = await db.from('categories').insert(missing.map(s => ({ household_id: household.id, ...s })));
+      const { error } = await db.from('categories').insert(missing);
       if (error) console.warn('Standardkategorien:', error);
+      return true;
     }
+    return false;
   }
 
   async function loadData() {
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const [catRes, itemRes, movementRes] = await Promise.all([
+    const [locationRes, catRes, itemRes, movementRes] = await Promise.all([
+      db.from('inventory_locations').select('*').eq('household_id', household.id).order('sort_order').order('created_at'),
       db.from('categories').select('*').eq('household_id', household.id).order('created_at'),
       db.from('items').select('*').eq('household_id', household.id).order('name'),
       db.from('stock_movements').select('id,item_id,delta,kind,undo_of,is_correction,created_at').eq('household_id', household.id).gte('created_at', since).order('created_at', { ascending:false })
     ]);
+    if (locationRes.error) throw locationRes.error;
     if (catRes.error) throw catRes.error;
     if (itemRes.error) throw itemRes.error;
     if (movementRes.error) throw movementRes.error;
+    locations = locationRes.data || [];
     categories = catRes.data || [];
     const allItemRows = itemRes.data || [];
     items = allItemRows.filter(item => !item.deleted_at);
@@ -271,8 +379,16 @@
   }
 
   function categoryName(id) {
-    const c = categories.find(x => x.id === id);
+    const c = categoryById(id);
     return c ? `${c.icon || '📦'} ${c.name}` : 'Ohne Kategorie';
+  }
+
+  function itemPlaceLabel(item) {
+    const category = categoryById(item?.category_id);
+    if (!category) return 'Ohne Kategorie';
+    const location = locationById(category.location_id);
+    const locationPart = location ? `🏠 ${locationLabel(location)} · ` : '';
+    return `${locationPart}${category.icon || '📦'} ${category.name}`;
   }
 
   function consumption30(itemId) {
@@ -283,7 +399,7 @@
   }
 
   function filteredItems() {
-    let result = [...items];
+    let result = itemsForActiveLocation(items);
     if (activeCategory === 'favorites') result = result.filter(i => i.is_favorite);
     else if (activeCategory !== 'all') result = result.filter(i => i.category_id === activeCategory);
     const q = searchTerm.trim().toLocaleLowerCase('de');
@@ -294,8 +410,13 @@
 
   function renderStock() {
     const filtered = filteredItems();
-    const lowItems = items.filter(i => i.quantity <= i.min_quantity);
+    const scopedItems = itemsForActiveLocation(items);
+    const lowItems = scopedItems.filter(i => i.quantity <= i.min_quantity);
+    const visibleCategories = activeLocation === 'all' ? [] : categoriesForLocation(activeLocation);
+    const needsHomeSelection = activeLocation === 'all';
+
     main.innerHTML = `
+      ${locationSwitcher()}
       <div class="section-title">
         <h2>Bestand</h2>
         <div class="actions">
@@ -304,17 +425,19 @@
           <button id="addItemBtn" class="primary-btn" type="button">+ Artikel</button>
         </div>
       </div>
+      ${needsHomeSelection ? `<div class="card" style="padding:11px 13px;margin-bottom:12px"><span class="item-meta">Zum Anlegen eines Artikels oder einer Kategorie bitte zuerst <strong>Vanessa</strong> oder <strong>Mika</strong> auswählen.</span></div>` : ''}
       ${lowItems.length ? `<div class="alert-card">🔔 ${lowItems.length === 1 ? '1 Artikel ist knapp.' : `${lowItems.length} Artikel sind knapp.`}</div>` : ''}
       <div class="search-wrap"><input id="stockSearch" type="search" placeholder="Artikel suchen …" value="${esc(searchTerm)}" /></div>
       <div class="category-chip-row">
         <button class="category-chip ${activeCategory==='all'?'active':''}" data-cat="all">Alle</button>
         <button class="category-chip ${activeCategory==='favorites'?'active':''}" data-cat="favorites">⭐ Favoriten</button>
-        ${categories.map(c => `<button class="category-chip ${activeCategory===c.id?'active':''}" data-cat="${c.id}">${esc(c.icon || '📦')} ${esc(c.name)}</button>`).join('')}
+        ${visibleCategories.map(c => `<button class="category-chip ${activeCategory===c.id?'active':''}" data-cat="${c.id}">${esc(c.icon || '📦')} ${esc(c.name)}</button>`).join('')}
       </div>
       <div class="item-list">
         ${filtered.length ? filtered.map(itemCard).join('') : `<div class="card empty">Keine passenden Artikel gefunden.</div>`}
       </div>`;
 
+    bindLocationSwitcher();
     document.getElementById('scanPackageBtn').onclick = openPackageScanner;
     document.getElementById('addCategoryBtn').onclick = openCategoryDialog;
     document.getElementById('addItemBtn').onclick = () => openItemDialog();
@@ -332,7 +455,7 @@
           <button class="favorite-btn ${item.is_favorite ? 'active' : ''}" data-favorite="${item.id}" type="button" aria-label="Favorit umschalten">${item.is_favorite ? '★' : '☆'}</button>
           <div>
             <div class="item-name">${esc(item.name)}</div>
-            <div class="item-meta">${esc(categoryName(item.category_id))} · Mindestbestand ${item.min_quantity} ${esc(item.unit || '')} ${isLow ? '<span class="low">· 🔔 knapp</span>' : ''}</div>
+            <div class="item-meta">${esc(activeLocation === 'all' ? itemPlaceLabel(item) : categoryName(item.category_id))} · Mindestbestand ${item.min_quantity} ${esc(item.unit || '')} ${isLow ? '<span class="low">· 🔔 knapp</span>' : ''}</div>
             ${pack > 1 ? `<div class="item-meta">📦 1 Packung = ${pack} ${esc(item.unit || '')}</div>` : ''}
           </div>
         </div>
@@ -440,7 +563,8 @@
   }
 
   function openPackageScanner() {
-    if (!items.length) return toast('Lege zuerst mindestens einen Artikel an.');
+    const scanItems = itemsForActiveLocation(items);
+    if (!scanItems.length) return toast('In dieser Auswahl gibt es noch keine Artikel.');
     if (!window.Tesseract) return toast('Texterkennung konnte nicht geladen werden. Bitte Internetverbindung prüfen.');
     scanCameraInput.value = '';
     scanCameraInput.click();
@@ -521,7 +645,8 @@
   }
 
   function renderScanMatches() {
-    scanMatches = items
+    const scanItems = itemsForActiveLocation(items);
+    scanMatches = scanItems
       .map(item => ({ item, score: scoreScanMatch(item, scanText) }))
       .filter(entry => entry.score > 0)
       .sort((a,b) => b.score - a.score || a.item.name.localeCompare(b.item.name, 'de'))
@@ -535,12 +660,12 @@
     const proposed = scanMatches.length
       ? `<div class="scan-section-title">Das könnte es sein:</div>${scanMatches.map(({item,score}) => `
           <button class="scan-candidate ${scanSelectedItemId===item.id?'active':''}" data-scan-item="${item.id}" type="button">
-            <span><strong>${esc(item.name)}</strong><small>${esc(categoryName(item.category_id))}</small></span>
+            <span><strong>${esc(item.name)}</strong><small>${esc(activeLocation === 'all' ? itemPlaceLabel(item) : categoryName(item.category_id))}</small></span>
             <em>${scanConfidence(score)}</em>
           </button>`).join('')}`
       : `<div class="scan-empty">🤔 Kein eindeutiger Treffer.<br><span>Du kannst den richtigen Artikel unten manuell auswählen.</span></div>`;
 
-    const selected = items.find(item => item.id === scanSelectedItemId);
+    const selected = scanItems.find(item => item.id === scanSelectedItemId);
     const booking = selected ? `
       <div class="scan-booking">
         <div><span class="eyebrow">Ausgewählt</span><strong>${esc(selected.name)}</strong></div>
@@ -556,7 +681,7 @@
       <label class="scan-fallback-label">Anderen Artikel auswählen
         <select id="scanFallbackSelect">
           <option value="">Bitte auswählen …</option>
-          ${items.slice().sort((a,b)=>a.name.localeCompare(b.name,'de')).map(item => `<option value="${item.id}" ${scanSelectedItemId===item.id?'selected':''}>${esc(item.name)} · ${esc(categoryName(item.category_id))}</option>`).join('')}
+          ${scanItems.slice().sort((a,b)=>a.name.localeCompare(b.name,'de')).map(item => `<option value="${item.id}" ${scanSelectedItemId===item.id?'selected':''}>${esc(item.name)} · ${esc(activeLocation === 'all' ? itemPlaceLabel(item) : categoryName(item.category_id))}</option>`).join('')}
         </select>
       </label>
       ${booking}
@@ -587,13 +712,16 @@
   }
 
   function renderShopping() {
-    const lowItems = items.filter(i => i.quantity <= i.min_quantity).sort((a,b) => a.name.localeCompare(b.name,'de'));
+    const lowItems = itemsForActiveLocation(items)
+      .filter(i => i.quantity <= i.min_quantity)
+      .sort((a,b) => a.name.localeCompare(b.name,'de'));
     main.innerHTML = `
+      ${locationSwitcher()}
       <div class="section-title"><h2>Einkaufsliste</h2><span class="badge">automatisch</span></div>
       <section class="card"><p style="margin:0;color:#71334f">Hier erscheint alles, dessen Bestand den eingestellten Mindestbestand erreicht oder unterschritten hat.</p></section>
       <div class="item-list">
         ${lowItems.length ? lowItems.map(i => `<article class="item-card">
-          <div><div class="item-name">${esc(i.name)}</div><div class="item-meta">Noch ${i.quantity} ${esc(i.unit || '')} · Mindestbestand ${i.min_quantity}</div></div>
+          <div><div class="item-name">${esc(i.name)}</div><div class="item-meta">${esc(activeLocation === 'all' ? itemPlaceLabel(i) : categoryName(i.category_id))} · Noch ${i.quantity} ${esc(i.unit || '')} · Mindestbestand ${i.min_quantity}</div></div>
           <div class="qty-control">
             <button class="qty-btn minus" data-id="${i.id}">−</button>
             <div class="qty">${i.quantity}</div>
@@ -601,27 +729,32 @@
           </div>
         </article>`).join('') : `<div class="card empty">Aktuell ist nichts knapp. 🎉</div>`}
       </div>`;
+    bindLocationSwitcher();
     document.querySelectorAll('.minus').forEach(b => b.onclick = () => changeQuantity(b.dataset.id, -1));
     document.querySelectorAll('.plus').forEach(b => b.onclick = () => changeQuantity(b.dataset.id, 1));
   }
 
   function renderStatistics() {
     const undone = new Set(movements.filter(m => m.undo_of).map(m => Number(m.undo_of)));
-    const stats = items
+    const scopedItems = itemsForActiveLocation(items);
+    const scopedAllItems = itemsForActiveLocation([...items, ...deletedItems]);
+    const scopedItemIds = new Set(scopedAllItems.map(item => item.id));
+    const stats = scopedItems
       .map(item => ({ item, used: consumption30(item.id) }))
       .filter(entry => entry.used > 0)
       .sort((a,b) => b.used - a.used || a.item.name.localeCompare(b.item.name, 'de'));
 
     const recent = movements
-      .filter(m => m.kind === 'change' && m.delta < 0 && !undone.has(Number(m.id)))
+      .filter(m => m.kind === 'change' && m.delta < 0 && !undone.has(Number(m.id)) && scopedItemIds.has(m.item_id))
       .slice(0, 10);
 
-    const movementItem = movement => [...items, ...deletedItems].find(item => item.id === movement.item_id);
+    const movementItem = movement => scopedAllItems.find(item => item.id === movement.item_id);
     const movementTime = value => new Date(value).toLocaleString('de-DE', {
       day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'
     });
 
     main.innerHTML = `
+      ${locationSwitcher()}
       <div class="section-title"><h2>Statistik</h2><span class="badge">30 Tage</span></div>
       <section class="card stats-intro">
         <div class="stats-hero-icon">📊</div>
@@ -635,7 +768,7 @@
           <article class="stat-card">
             <div>
               <div class="item-name">${esc(item.name)}</div>
-              <div class="item-meta">${esc(categoryName(item.category_id))}</div>
+              <div class="item-meta">${esc(activeLocation === 'all' ? itemPlaceLabel(item) : categoryName(item.category_id))}</div>
             </div>
             <div class="stat-value"><strong>${used}</strong><span>${esc(item.unit || '')}</span><small>verbraucht</small></div>
           </article>`).join('') : `
@@ -666,6 +799,7 @@
         }).join('') : '<p class="empty">Noch keine Entnahmen in den letzten 30 Tagen.</p>'}
       </section>`;
 
+    bindLocationSwitcher();
     document.querySelectorAll('.correction-toggle').forEach(button => {
       button.onclick = () => setMovementCorrection(
         Number(button.dataset.movement),
@@ -704,8 +838,28 @@
     main.innerHTML = `
       <section class="card">
         <h2>${esc(household.name)} 💗</h2>
-        <p style="color:#71334f">Mit diesem Code kann die zweite Person dem Haushalt beitreten:</p>
+        <p style="color:#71334f">Mit diesem Code kann die zweite Person dem gemeinsamen Bestand beitreten:</p>
         <div class="code-box"><span class="code">${esc(household.invite_code)}</span><button id="copyCode" class="secondary-btn">Kopieren</button></div>
+      </section>
+
+      <section class="card">
+        <h2>🏠 Wohnungen & Kategorien</h2>
+        <p class="item-meta">Eure Artikel sind nach Wohnung getrennt. Kategorien gehören immer zu genau einer Wohnung.</p>
+        ${locations.map(location => {
+          const locationCategories = categoriesForLocation(location.id);
+          return `
+            <div style="padding:12px 0;border-top:1px solid #f7c6dc">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:7px">
+                <strong>🏠 ${esc(locationLabel(location))}</strong>
+                <button class="small-btn add-cat-location" data-location="${location.id}" type="button">+ Kategorie</button>
+              </div>
+              ${locationCategories.length ? locationCategories.map(c => `
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #fde4ef">
+                  <span>${esc(c.icon || '📦')} ${esc(c.name)}</span>
+                  <button class="small-btn delete-cat" data-id="${c.id}" type="button">Löschen</button>
+                </div>`).join('') : '<p class="empty" style="padding:8px 0">Noch keine Kategorien.</p>'}
+            </div>`;
+        }).join('')}
       </section>
 
       <section class="card">
@@ -715,7 +869,7 @@
           <button id="exportBackup" class="primary-btn" type="button">💾 Backup sichern</button>
           <button id="importBackup" class="secondary-btn" type="button">📥 Backup wiederherstellen</button>
         </div>
-        <p class="item-meta" style="margin-bottom:0;margin-top:10px">Gesichert werden Kategorien, Artikel, Bestände, Favoriten, Mindestbestände, Packungsgrößen, Erkennungsbegriffe und der Papierkorb.</p>
+        <p class="item-meta" style="margin-bottom:0;margin-top:10px">Gesichert werden beide Wohnungen, Kategorien, Artikel, Bestände, Favoriten, Mindestbestände, Packungsgrößen, Erkennungsbegriffe und der Papierkorb.</p>
       </section>
 
       <section class="card">
@@ -725,37 +879,49 @@
           <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid #f7c6dc">
             <div>
               <strong>${esc(item.name)}</strong>
-              <div class="item-meta">${esc(categoryName(item.category_id))} · ${item.quantity} ${esc(item.unit || '')}</div>
+              <div class="item-meta">${esc(itemPlaceLabel(item))} · ${item.quantity} ${esc(item.unit || '')}</div>
             </div>
             <button class="small-btn restore-item" data-id="${item.id}" type="button">Wiederherstellen</button>
           </div>`).join('') : '<p class="empty" style="padding:14px 0">Papierkorb ist leer. ✨</p>'}
       </section>
 
       <section class="card">
-        <h2>Kategorien</h2>
-        ${categories.length ? categories.map(c => `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #f7c6dc"><span>${esc(c.icon || '📦')} ${esc(c.name)}</span><button class="small-btn delete-cat" data-id="${c.id}">Löschen</button></div>`).join('') : '<p class="empty">Noch keine Kategorien.</p>'}
-        <button id="settingsAddCategory" class="secondary-btn" style="margin-top:12px">+ Kategorie hinzufügen</button>
-      </section>
-      <section class="card">
         <h2>Neue Testfunktionen</h2>
-        <p class="item-meta">⭐ Favoriten · ↩️ Rückgängig · 🔎 Suche · 📦 Packungsgrößen · 🔔 Bestandswarnungen</p>
-        <p class="item-meta">📊 Der 30-Tage-Verbrauch hat einen eigenen Menüpunkt unten.</p>
-        <p class="item-meta">📷 Kamera-Scanner (Beta): liest die Aufschrift einer Verpackung und schlägt passende Artikel vor.</p>
+        <p class="item-meta">🏠 Zwei Wohnungen · ⭐ Favoriten · ↩️ Rückgängig · 🔎 Suche · 📦 Packungsgrößen · 🔔 Bestandswarnungen</p>
+        <p class="item-meta">📊 Der 30-Tage-Verbrauch lässt sich nach Wohnung oder gemeinsam anzeigen.</p>
+        <p class="item-meta">📷 Kamera-Scanner (Beta): liest die Aufschrift einer Verpackung und sucht im aktuell gewählten Haushalt.</p>
       </section>`;
+
     document.getElementById('copyCode').onclick = async () => {
       await navigator.clipboard.writeText(household.invite_code);
       toast('Einladungscode kopiert.');
     };
     document.getElementById('exportBackup').onclick = exportBackup;
     document.getElementById('importBackup').onclick = chooseBackupFile;
-    document.getElementById('settingsAddCategory').onclick = openCategoryDialog;
+    document.querySelectorAll('.add-cat-location').forEach(button => button.onclick = () => {
+      activeLocation = button.dataset.location;
+      activeCategory = 'all';
+      localStorage.setItem(`haushaltsbestand-location-${household.id}`, activeLocation);
+      openCategoryDialog();
+    });
     document.querySelectorAll('.restore-item').forEach(b => b.onclick = () => restoreDeletedItem(b.dataset.id));
     document.querySelectorAll('.delete-cat').forEach(b => b.onclick = () => deleteCategory(b.dataset.id));
+  }
+
+  function backupSafeLocation(location) {
+    return {
+      id: location.id,
+      name: location.name,
+      icon: location.icon || '🏠',
+      sort_order: Number(location.sort_order || 0),
+      created_at: location.created_at || null
+    };
   }
 
   function backupSafeCategory(category) {
     return {
       id: category.id,
+      location_id: category.location_id,
       name: category.name,
       icon: category.icon || '📦',
       created_at: category.created_at || null
@@ -790,9 +956,10 @@
 
       const backup = {
         format: 'haushaltsbestand-backup',
-        version: 1,
+        version: 2,
         exported_at: new Date().toISOString(),
         household_name: household.name,
+        locations: locations.map(backupSafeLocation),
         categories: categories.map(backupSafeCategory),
         items: (allItems || []).map(backupSafeItem)
       };
@@ -843,15 +1010,53 @@
     if (!raw || raw.format !== 'haushaltsbestand-backup' || !Array.isArray(raw.categories) || !Array.isArray(raw.items)) {
       throw new Error('Das ist keine gültige Haushaltsbestand-Sicherungsdatei.');
     }
-    if (raw.categories.length > 200 || raw.items.length > 5000) {
+    if (raw.categories.length > 300 || raw.items.length > 5000 || (Array.isArray(raw.locations) && raw.locations.length > 20)) {
       throw new Error('Die Sicherungsdatei ist ungewöhnlich groß.');
     }
 
+    const vanessa = locations.find(location => location.name === 'Vanessas Haushalt') || locations[0];
+    if (!vanessa) throw new Error('Es wurde keine Wohnung gefunden.');
+
+    const locationIdMap = new Map();
+    let locationsOut = [];
+
+    if (Array.isArray(raw.locations) && raw.locations.length) {
+      locationsOut = raw.locations.map(location => {
+        if (!location?.id || !location?.name) throw new Error('Eine Wohnung im Backup ist ungültig.');
+        const name = String(location.name).trim().slice(0, 60);
+        const existing = locations.find(current => current.name.toLocaleLowerCase('de') === name.toLocaleLowerCase('de'));
+        const targetId = existing?.id || String(location.id);
+        locationIdMap.set(String(location.id), targetId);
+        return {
+          id: targetId,
+          household_id: household.id,
+          name,
+          icon: String(location.icon || '🏠').slice(0, 8),
+          sort_order: Math.trunc(Number(location.sort_order || 0))
+        };
+      });
+    } else {
+      // Backups from v1.5 and older had no apartment layer.
+      // They belong to Vanessa, matching the migration of the live data.
+      locationIdMap.set('legacy', vanessa.id);
+      locationsOut = locations.map(location => ({
+        id: location.id,
+        household_id: household.id,
+        name: location.name,
+        icon: location.icon || '🏠',
+        sort_order: Math.trunc(Number(location.sort_order || 0))
+      }));
+    }
+
+    const validLocationIds = new Set(locationsOut.map(location => location.id));
     const categoriesOut = raw.categories.map(category => {
       if (!category?.id || !category?.name) throw new Error('Eine Kategorie im Backup ist ungültig.');
+      const sourceLocationId = category.location_id ? String(category.location_id) : 'legacy';
+      const mappedLocationId = locationIdMap.get(sourceLocationId) || (validLocationIds.has(sourceLocationId) ? sourceLocationId : vanessa.id);
       return {
         id: String(category.id),
         household_id: household.id,
+        location_id: mappedLocationId,
         name: String(category.name).trim().slice(0, 40),
         icon: String(category.icon || '📦').slice(0, 8)
       };
@@ -879,7 +1084,7 @@
       };
     });
 
-    return { categories: categoriesOut, items: itemsOut };
+    return { locations: locationsOut, categories: categoriesOut, items: itemsOut };
   }
 
   async function importBackupFile(file) {
@@ -889,6 +1094,11 @@
       if (!confirm(`Backup vom ${raw.exported_at ? new Date(raw.exported_at).toLocaleString('de-DE') : 'unbekannten Datum'} wiederherstellen?
 
 Vorhandene passende Kategorien und Artikel werden auf den Stand des Backups gesetzt. Neuere, nicht im Backup enthaltene Artikel bleiben sicherheitshalber erhalten.`)) return;
+
+      if (backup.locations.length) {
+        const locationResult = await db.from('inventory_locations').upsert(backup.locations, { onConflict:'id' });
+        if (locationResult.error) throw locationResult.error;
+      }
 
       const catResult = await db.from('categories').upsert(backup.categories, { onConflict:'id' });
       if (catResult.error) throw catResult.error;
@@ -910,14 +1120,26 @@ Vorhandene passende Kategorien und Artikel werden auf den Stand des Backups gese
   }
 
   function openCategoryDialog() {
+    if (activeLocation === 'all') {
+      toast('Bitte zuerst Vanessa oder Mika auswählen.');
+      return;
+    }
     document.getElementById('categoryName').value = '';
     document.getElementById('categoryIcon').value = '';
     categoryDialog.showModal();
   }
 
   function openItemDialog(item=null) {
-    if (!categories.length) {
-      toast('Bitte zuerst eine Kategorie anlegen.');
+    const dialogLocationId = item ? itemLocationId(item) : activeLocation;
+    if (dialogLocationId === 'all' || !dialogLocationId) {
+      toast('Bitte zuerst Vanessa oder Mika auswählen.');
+      return;
+    }
+
+    const availableCategories = categoriesForLocation(dialogLocationId);
+    if (!availableCategories.length) {
+      activeLocation = dialogLocationId;
+      toast('Bitte zuerst eine Kategorie in dieser Wohnung anlegen.');
       return openCategoryDialog();
     }
     document.getElementById('itemDialogTitle').textContent = item ? 'Artikel bearbeiten' : 'Artikel hinzufügen';
@@ -929,8 +1151,8 @@ Vorhandene passende Kategorien und Artikel werden auf den Stand des Backups gese
     document.getElementById('itemPackageSize').value = item?.package_size || 1;
     document.getElementById('itemRecognitionTerms').value = Array.isArray(item?.recognition_terms) ? item.recognition_terms.join(', ') : '';
     const select = document.getElementById('itemCategory');
-    select.innerHTML = categories.map(c => `<option value="${c.id}">${esc(c.icon || '📦')} ${esc(c.name)}</option>`).join('');
-    select.value = item?.category_id || categories[0].id;
+    select.innerHTML = availableCategories.map(c => `<option value="${c.id}">${esc(c.icon || '📦')} ${esc(c.name)}</option>`).join('');
+    select.value = item?.category_id || availableCategories[0].id;
     itemDialog.showModal();
   }
 
@@ -949,7 +1171,7 @@ Vorhandene passende Kategorien und Artikel werden auf den Stand des Backups gese
     e.preventDefault();
     const name = document.getElementById('categoryName').value.trim();
     const icon = document.getElementById('categoryIcon').value.trim() || '📦';
-    const { error } = await db.from('categories').insert({ household_id: household.id, name, icon });
+    const { error } = await db.from('categories').insert({ household_id: household.id, location_id: activeLocation, name, icon });
     if (error) return toast(error.message);
     categoryDialog.close();
     await loadData();
@@ -1014,6 +1236,11 @@ Vorhandene passende Kategorien und Artikel werden auf den Stand des Backups gese
       .on('postgres_changes', { event:'*', schema:'public', table:'stock_movements' }, async () => {
         await loadData(); renderApp();
       })
+      .on('postgres_changes', { event:'*', schema:'public', table:'inventory_locations' }, async () => {
+        await loadData();
+        resolveActiveLocation();
+        renderApp();
+      })
       .subscribe();
   }
 
@@ -1022,8 +1249,9 @@ Vorhandene passende Kategorien und Artikel werden auf den Stand des Backups gese
       await loadHousehold();
       if (!household) return renderNoHousehold();
       await loadData();
-      await ensureStandardCategories();
-      await loadData();
+      if (await ensureInventoryLocations()) await loadData();
+      if (await ensureStandardCategories()) await loadData();
+      resolveActiveLocation();
       await subscribeRealtime();
       renderApp();
     } catch (err) {
@@ -1065,7 +1293,7 @@ Vorhandene passende Kategorien und Artikel werden auf den Stand des Backups gese
 
     db.auth.onAuthStateChange(async (_event, newSession) => {
       session = newSession;
-      household = null; categories = []; items = []; deletedItems = []; movements = [];
+      household = null; locations = []; categories = []; items = []; deletedItems = []; movements = []; activeLocation = 'all';
       if (session) await bootstrapApp(); else renderAuth();
     });
   }
