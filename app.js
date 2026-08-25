@@ -16,6 +16,8 @@
   const itemDialog = document.getElementById('itemDialog');
   const categoryForm = document.getElementById('categoryForm');
   const itemForm = document.getElementById('itemForm');
+  const cancelCategoryBtn = document.getElementById('cancelCategoryBtn');
+  const cancelItemBtn = document.getElementById('cancelItemBtn');
   const scanDialog = document.getElementById('scanDialog');
   const scanCameraInput = document.getElementById('scanCameraInput');
   const scanPreview = document.getElementById('scanPreview');
@@ -654,6 +656,16 @@
     select.value = item?.category_id || categories[0].id;
     itemDialog.showModal();
   }
+
+  cancelCategoryBtn.addEventListener('click', () => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    categoryDialog.close();
+  });
+
+  cancelItemBtn.addEventListener('click', () => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    itemDialog.close();
+  });
 
   categoryForm.addEventListener('submit', async (e) => {
     if (e.submitter?.value === 'cancel') return;

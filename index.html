@@ -38,8 +38,8 @@
       <label>Name<input id="categoryName" maxlength="40" required placeholder="z. B. Bad" /></label>
       <label>Emoji<input id="categoryIcon" maxlength="4" placeholder="🛁" /></label>
       <div class="dialog-actions">
-        <button value="cancel" class="secondary-btn">Abbrechen</button>
-        <button id="saveCategoryBtn" value="default" class="primary-btn">Speichern</button>
+        <button id="cancelCategoryBtn" type="button" class="secondary-btn">Abbrechen</button>
+        <button id="saveCategoryBtn" type="submit" value="default" class="primary-btn">Speichern</button>
       </div>
     </form>
   </dialog>
@@ -62,8 +62,8 @@
       <label>Erkennungsbegriffe <span class="optional">optional</span><input id="itemRecognitionTerms" maxlength="240" placeholder="z. B. Vollmilch, H-Milch, Milbona" /></label>
       <p class="form-hint">Hilft dem Kamera-Scanner, wenn die Aufschrift nicht genau dem Artikelnamen entspricht. Mehrere Begriffe mit Komma trennen.</p>
       <div class="dialog-actions">
-        <button value="cancel" class="secondary-btn">Abbrechen</button>
-        <button id="saveItemBtn" value="default" class="primary-btn">Speichern</button>
+        <button id="cancelItemBtn" type="button" class="secondary-btn">Abbrechen</button>
+        <button id="saveItemBtn" type="submit" value="default" class="primary-btn">Speichern</button>
       </div>
     </form>
   </dialog>
