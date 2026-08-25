@@ -59,6 +59,8 @@
         <label>Packungsgröße<input id="itemPackageSize" type="number" min="1" step="1" value="1" required /></label>
       </div>
       <p class="form-hint">Beispiel: Ein Karton Katzenfutter enthält 12 Dosen → Packungsgröße 12.</p>
+      <label>Erkennungsbegriffe <span class="optional">optional</span><input id="itemRecognitionTerms" maxlength="240" placeholder="z. B. Vollmilch, H-Milch, Milbona" /></label>
+      <p class="form-hint">Hilft dem Kamera-Scanner, wenn die Aufschrift nicht genau dem Artikelnamen entspricht. Mehrere Begriffe mit Komma trennen.</p>
       <div class="dialog-actions">
         <button value="cancel" class="secondary-btn">Abbrechen</button>
         <button id="saveItemBtn" value="default" class="primary-btn">Speichern</button>
@@ -66,10 +68,42 @@
     </form>
   </dialog>
 
+  <input id="scanCameraInput" class="hidden-file" type="file" accept="image/*" capture="environment" />
+
+  <dialog id="scanDialog" class="scan-dialog">
+    <div class="dialog-card">
+      <div class="scan-dialog-head">
+        <div>
+          <div class="eyebrow">Testfunktion · Beta</div>
+          <h2>📷 Verpackung erkennen</h2>
+        </div>
+        <button id="scanCloseTop" class="icon-btn" type="button" aria-label="Scanner schließen">×</button>
+      </div>
+      <img id="scanPreview" class="scan-preview" alt="Aufgenommene Verpackung" />
+      <section id="scanProgressPanel" class="scan-progress-panel">
+        <strong id="scanStatus">Bild wird vorbereitet …</strong>
+        <div class="scan-progress"><div id="scanProgressBar"></div></div>
+        <p class="form-hint">Beim ersten Scan kann das Laden der deutschen Texterkennung etwas dauern.</p>
+      </section>
+      <section id="scanResults" class="hidden">
+        <div id="scanCandidates"></div>
+        <details class="scan-text-details">
+          <summary>Erkannten Text anzeigen</summary>
+          <pre id="scanRawText"></pre>
+        </details>
+      </section>
+      <div class="dialog-actions">
+        <button id="scanAgainBtn" class="secondary-btn" type="button">📷 Neues Foto</button>
+        <button id="scanCloseBtn" class="secondary-btn" type="button">Schließen</button>
+      </div>
+    </div>
+  </dialog>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

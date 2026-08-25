@@ -16,6 +16,15 @@
   const itemDialog = document.getElementById('itemDialog');
   const categoryForm = document.getElementById('categoryForm');
   const itemForm = document.getElementById('itemForm');
+  const scanDialog = document.getElementById('scanDialog');
+  const scanCameraInput = document.getElementById('scanCameraInput');
+  const scanPreview = document.getElementById('scanPreview');
+  const scanProgressPanel = document.getElementById('scanProgressPanel');
+  const scanStatus = document.getElementById('scanStatus');
+  const scanProgressBar = document.getElementById('scanProgressBar');
+  const scanResults = document.getElementById('scanResults');
+  const scanCandidates = document.getElementById('scanCandidates');
+  const scanRawText = document.getElementById('scanRawText');
 
   const config = window.APP_CONFIG || {};
   const configured = config.supabaseUrl && config.supabasePublishableKey &&
@@ -32,10 +41,54 @@
   let searchTerm = '';
   let authMode = 'login';
   let realtimeChannel = null;
+  let scanText = '';
+  let scanSelectedItemId = null;
+  let scanMatches = [];
+  let scanObjectUrl = '';
 
   const esc = (value='') => String(value)
     .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
     .replaceAll('"','&quot;').replaceAll("'",'&#039;');
+
+  const normalizeScanText = (value='') => String(value)
+    .toLocaleLowerCase('de')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replaceAll('ß', 'ss')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const scanTokens = (value='') => normalizeScanText(value).split(' ').filter(token => token.length >= 3);
+
+  function scoreScanMatch(item, recognizedText) {
+    const haystack = normalizeScanText(recognizedText);
+    const words = new Set(scanTokens(recognizedText));
+    const name = normalizeScanText(item.name);
+    let score = 0;
+
+    if (name && haystack.includes(name)) score += 14;
+    scanTokens(item.name).forEach(token => {
+      if (words.has(token)) score += 5;
+      else if (haystack.includes(token)) score += 2;
+    });
+
+    const aliases = Array.isArray(item.recognition_terms) ? item.recognition_terms : [];
+    aliases.forEach(alias => {
+      const normalizedAlias = normalizeScanText(alias);
+      if (!normalizedAlias) return;
+      if (haystack.includes(normalizedAlias)) score += 8;
+      else scanTokens(alias).forEach(token => { if (words.has(token)) score += 1; });
+    });
+
+    return score;
+  }
+
+  function scanConfidence(score) {
+    if (score >= 14) return 'sehr passend';
+    if (score >= 8) return 'passend';
+    return 'möglich';
+  }
 
   function toast(message, actionLabel='', actionFn=null) {
     toastEl.innerHTML = `<span>${esc(message)}</span>${actionLabel ? `<button id="toastAction" type="button">${esc(actionLabel)}</button>` : ''}`;
@@ -241,6 +294,7 @@
       <div class="section-title">
         <h2>Bestand</h2>
         <div class="actions">
+          <button id="scanPackageBtn" class="scan-btn" type="button">📷 Scannen <span>Beta</span></button>
           <button id="addCategoryBtn" class="small-btn" type="button">+ Kategorie</button>
           <button id="addItemBtn" class="primary-btn" type="button">+ Artikel</button>
         </div>
@@ -256,6 +310,7 @@
         ${filtered.length ? filtered.map(itemCard).join('') : `<div class="card empty">Keine passenden Artikel gefunden.</div>`}
       </div>`;
 
+    document.getElementById('scanPackageBtn').onclick = openPackageScanner;
     document.getElementById('addCategoryBtn').onclick = openCategoryDialog;
     document.getElementById('addItemBtn').onclick = () => openItemDialog();
     document.getElementById('stockSearch').oninput = (e) => { searchTerm = e.target.value; renderStock(); document.getElementById('stockSearch')?.focus(); };
@@ -355,6 +410,153 @@
     renderApp();
   }
 
+  function openPackageScanner() {
+    if (!items.length) return toast('Lege zuerst mindestens einen Artikel an.');
+    if (!window.Tesseract) return toast('Texterkennung konnte nicht geladen werden. Bitte Internetverbindung prüfen.');
+    scanCameraInput.value = '';
+    scanCameraInput.click();
+  }
+
+  function resetScanUi(file) {
+    scanText = '';
+    scanSelectedItemId = null;
+    scanMatches = [];
+    if (scanObjectUrl) URL.revokeObjectURL(scanObjectUrl);
+    scanObjectUrl = URL.createObjectURL(file);
+    scanPreview.src = scanObjectUrl;
+    scanProgressPanel.classList.remove('hidden');
+    scanResults.classList.add('hidden');
+    scanProgressBar.style.width = '4%';
+    scanStatus.textContent = 'Bild wird vorbereitet …';
+    scanCandidates.innerHTML = '';
+    scanRawText.textContent = '';
+    if (!scanDialog.open) scanDialog.showModal();
+  }
+
+  function updateScanProgress(message) {
+    const statusMap = {
+      'loading tesseract core': 'Texterkennung wird geladen …',
+      'initializing tesseract': 'Texterkennung startet …',
+      'loading language traineddata': 'Deutsche Sprache wird geladen …',
+      'initializing api': 'Scanner wird vorbereitet …',
+      'recognizing text': 'Aufschrift wird gelesen …'
+    };
+    if (message?.status) scanStatus.textContent = statusMap[message.status] || 'Verpackung wird analysiert …';
+    if (typeof message?.progress === 'number') {
+      scanProgressBar.style.width = `${Math.max(6, Math.round(message.progress * 100))}%`;
+    }
+  }
+
+  async function prepareScanImage(file) {
+    try {
+      const bitmap = await createImageBitmap(file);
+      const longest = Math.max(bitmap.width, bitmap.height);
+      if (longest <= 1800) {
+        bitmap.close?.();
+        return file;
+      }
+      const scale = 1800 / longest;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(bitmap.width * scale);
+      canvas.height = Math.round(bitmap.height * scale);
+      const ctx = canvas.getContext('2d', { alpha: false });
+      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close?.();
+      return await new Promise(resolve => canvas.toBlob(blob => resolve(blob || file), 'image/jpeg', .88));
+    } catch (_) {
+      return file;
+    }
+  }
+
+  async function recognizePackage(file) {
+    resetScanUi(file);
+    let worker = null;
+    try {
+      const prepared = await prepareScanImage(file);
+      worker = await Tesseract.createWorker('deu', 1, { logger: updateScanProgress });
+      const result = await worker.recognize(prepared, { rotateAuto: true });
+      scanText = String(result?.data?.text || '').trim();
+      scanProgressBar.style.width = '100%';
+      if (!scanText) throw new Error('Auf der Verpackung konnte kein Text erkannt werden.');
+      renderScanMatches();
+    } catch (err) {
+      console.error('Scanner:', err);
+      scanStatus.textContent = err.message || 'Die Verpackung konnte nicht erkannt werden.';
+      scanProgressBar.style.width = '0%';
+      scanCandidates.innerHTML = `<div class="scan-empty">😕 Kein Text erkannt.<br><span>Versuche ein helleres Foto, halte die Packung gerade und fülle das Bild möglichst mit der Vorderseite.</span></div>`;
+      scanResults.classList.remove('hidden');
+      scanRawText.textContent = scanText;
+    } finally {
+      if (worker) await worker.terminate().catch(() => {});
+    }
+  }
+
+  function renderScanMatches() {
+    scanMatches = items
+      .map(item => ({ item, score: scoreScanMatch(item, scanText) }))
+      .filter(entry => entry.score > 0)
+      .sort((a,b) => b.score - a.score || a.item.name.localeCompare(b.item.name, 'de'))
+      .slice(0, 5);
+
+    if (!scanSelectedItemId && scanMatches.length) scanSelectedItemId = scanMatches[0].item.id;
+    scanProgressPanel.classList.add('hidden');
+    scanResults.classList.remove('hidden');
+    scanRawText.textContent = scanText;
+
+    const proposed = scanMatches.length
+      ? `<div class="scan-section-title">Das könnte es sein:</div>${scanMatches.map(({item,score}) => `
+          <button class="scan-candidate ${scanSelectedItemId===item.id?'active':''}" data-scan-item="${item.id}" type="button">
+            <span><strong>${esc(item.name)}</strong><small>${esc(categoryName(item.category_id))}</small></span>
+            <em>${scanConfidence(score)}</em>
+          </button>`).join('')}`
+      : `<div class="scan-empty">🤔 Kein eindeutiger Treffer.<br><span>Du kannst den richtigen Artikel unten manuell auswählen.</span></div>`;
+
+    const selected = items.find(item => item.id === scanSelectedItemId);
+    const booking = selected ? `
+      <div class="scan-booking">
+        <div><span class="eyebrow">Ausgewählt</span><strong>${esc(selected.name)}</strong></div>
+        <div class="scan-booking-buttons">
+          <button class="qty-btn scan-delta" data-scan-delta="-1" type="button">−</button>
+          <span class="scan-booking-label">Bestand<br><b>${selected.quantity} ${esc(selected.unit || '')}</b></span>
+          <button class="qty-btn scan-delta" data-scan-delta="1" type="button">+</button>
+        </div>
+        ${Number(selected.package_size || 1) > 1 ? `<button class="secondary-btn scan-pack" type="button">📦 +1 Packung (${selected.package_size})</button>` : ''}
+      </div>` : '';
+
+    scanCandidates.innerHTML = `${proposed}
+      <label class="scan-fallback-label">Anderen Artikel auswählen
+        <select id="scanFallbackSelect">
+          <option value="">Bitte auswählen …</option>
+          ${items.slice().sort((a,b)=>a.name.localeCompare(b.name,'de')).map(item => `<option value="${item.id}" ${scanSelectedItemId===item.id?'selected':''}>${esc(item.name)} · ${esc(categoryName(item.category_id))}</option>`).join('')}
+        </select>
+      </label>
+      ${booking}
+      <p class="scan-tip">💡 Falls ein Artikel öfter nicht erkannt wird, kannst du unter <b>Bearbeiten → Erkennungsbegriffe</b> Wörter wie „H-Milch“ oder einen Markennamen ergänzen.</p>`;
+
+    document.querySelectorAll('[data-scan-item]').forEach(button => button.onclick = () => {
+      scanSelectedItemId = button.dataset.scanItem;
+      renderScanMatches();
+    });
+    const fallback = document.getElementById('scanFallbackSelect');
+    if (fallback) fallback.onchange = () => {
+      scanSelectedItemId = fallback.value || null;
+      renderScanMatches();
+    };
+    document.querySelectorAll('.scan-delta').forEach(button => button.onclick = async () => {
+      const id = scanSelectedItemId;
+      if (!id) return;
+      scanDialog.close();
+      await changeQuantity(id, Number(button.dataset.scanDelta));
+    });
+    const packBtn = document.querySelector('.scan-pack');
+    if (packBtn) packBtn.onclick = async () => {
+      const item = items.find(entry => entry.id === scanSelectedItemId);
+      if (!item) return;
+      scanDialog.close();
+      await changeQuantity(item.id, Math.max(1, Number(item.package_size || 1)));
+    };
+  }
+
   function renderShopping() {
     const lowItems = items.filter(i => i.quantity <= i.min_quantity).sort((a,b) => a.name.localeCompare(b.name,'de'));
     main.innerHTML = `
@@ -417,7 +619,8 @@
       <section class="card">
         <h2>Neue Testfunktionen</h2>
         <p class="item-meta">⭐ Favoriten · ↩️ Rückgängig · 🔎 Suche · 📦 Packungsgrößen · 🔔 Bestandswarnungen</p>
-        <p class="item-meta">📊 Der 30-Tage-Verbrauch hat jetzt einen eigenen Menüpunkt unten.</p>
+        <p class="item-meta">📊 Der 30-Tage-Verbrauch hat einen eigenen Menüpunkt unten.</p>
+        <p class="item-meta">📷 Kamera-Scanner (Beta): liest die Aufschrift einer Verpackung und schlägt passende Artikel vor.</p>
       </section>`;
     document.getElementById('copyCode').onclick = async () => {
       await navigator.clipboard.writeText(household.invite_code);
@@ -445,6 +648,7 @@
     document.getElementById('itemMinimum').value = item?.min_quantity ?? 0;
     document.getElementById('itemUnit').value = item?.unit || 'Stk.';
     document.getElementById('itemPackageSize').value = item?.package_size || 1;
+    document.getElementById('itemRecognitionTerms').value = Array.isArray(item?.recognition_terms) ? item.recognition_terms.join(', ') : '';
     const select = document.getElementById('itemCategory');
     select.innerHTML = categories.map(c => `<option value="${c.id}">${esc(c.icon || '📦')} ${esc(c.name)}</option>`).join('');
     select.value = item?.category_id || categories[0].id;
@@ -474,7 +678,12 @@
       category_id: document.getElementById('itemCategory').value,
       min_quantity: Number(document.getElementById('itemMinimum').value),
       unit: document.getElementById('itemUnit').value.trim() || 'Stk.',
-      package_size: Math.max(1, Number(document.getElementById('itemPackageSize').value || 1))
+      package_size: Math.max(1, Number(document.getElementById('itemPackageSize').value || 1)),
+      recognition_terms: document.getElementById('itemRecognitionTerms').value
+        .split(/[,;]/)
+        .map(value => value.trim())
+        .filter(Boolean)
+        .slice(0, 20)
     };
 
     if (id) {
@@ -529,6 +738,23 @@
       toast(err.message || 'Daten konnten nicht geladen werden.');
     }
   }
+
+  scanCameraInput.addEventListener('change', async () => {
+    const file = scanCameraInput.files?.[0];
+    if (file) await recognizePackage(file);
+  });
+  document.getElementById('scanAgainBtn').onclick = () => {
+    scanDialog.close();
+    openPackageScanner();
+  };
+  document.getElementById('scanCloseBtn').onclick = () => scanDialog.close();
+  document.getElementById('scanCloseTop').onclick = () => scanDialog.close();
+  scanDialog.addEventListener('close', () => {
+    if (scanObjectUrl) {
+      URL.revokeObjectURL(scanObjectUrl);
+      scanObjectUrl = '';
+    }
+  });
 
   document.querySelectorAll('.nav-btn').forEach(btn => btn.onclick = () => {
     activeTab = btn.dataset.tab;

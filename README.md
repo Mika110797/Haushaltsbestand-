@@ -1,26 +1,16 @@
-# Haushaltsbestand v1.3.2
+# Haushaltsbestand v1.4 – Kamera-Beta
 
-Private PWA für einen gemeinsamen Haushaltsbestand auf iPhone und Android.
+Diese Testversion baut auf v1.3.2 auf und ergänzt einen experimentellen Verpackungs-Scanner.
 
-## Neu in v1.3
-- ⭐ Favoriten
-- ↩️ Rückgängig nach Bestandsänderungen
-- 🔎 Artikelsuche
-- 📦 optionale Packungsgröße mit „+1 Packung“
-- 📊 Verbrauch der letzten 30 Tage (ab v1.3 erfasste Änderungen)
-- 🔔 deutliche Warnung bei niedrigem Bestand
-- 💗 stärkeres Pink-Design
-- 🧊 Kühlschrank, 🥫 Vorratskammer und 📦 Keller als Standardkategorien; weitere Kategorien bleiben möglich
+Neu:
+- 📷 „Scannen (Beta)“ in der Bestandsansicht
+- Kamera/Foto der Verpackung → lokale Texterkennung im Browser
+- Abgleich der erkannten Aufschrift mit vorhandenen Artikeln
+- Treffer auswählen und direkt +1 / −1 buchen
+- optional +1 Packung, wenn eine Packungsgröße hinterlegt ist
+- optionale „Erkennungsbegriffe“ pro Artikel, z. B. „H-Milch, Vollmilch, Milbona“
 
-## Technik
-- Supabase Auth und PostgreSQL
-- Row Level Security für Haushaltsdaten
-- Echtzeit-Synchronisierung von Artikeln und Kategorien
-- Installierbar als PWA über GitHub Pages
-
-- 📱 App-artiges Touchverhalten: kein versehentliches Pinch- oder Doppeltipp-Zoomen
-
-
-## Neu in v1.3.2
-- 📊 Statistik als eigener Menüpunkt in der unteren Navigation
-- 30-Tage-Verbrauch aus der Bestandsansicht entfernt, damit sie übersichtlicher bleibt
+Hinweise:
+- Beim ersten Scan werden OCR-Komponenten und die deutsche Sprachdatei aus dem Internet geladen. Das kann auf dem Handy etwas dauern.
+- Diese Beta erkennt Text auf der Verpackung, aber noch keine echte Bildbedeutung wie ein KI-Vision-Modell.
+- Es wird niemals automatisch ein Bestand geändert; vor jeder Buchung muss ein Artikel bestätigt werden.
