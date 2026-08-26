@@ -34,9 +34,12 @@
 
   <dialog id="categoryDialog">
     <form method="dialog" id="categoryForm" class="dialog-card">
-      <h2>Kategorie hinzufügen</h2>
+      <h2 id="categoryDialogTitle">Kategorie hinzufügen</h2>
+      <input id="categoryId" type="hidden" />
       <label>Name<input id="categoryName" maxlength="40" required placeholder="z. B. Bad" /></label>
-      <label>Emoji<input id="categoryIcon" maxlength="4" placeholder="🛁" /></label>
+      <label>Emoji<input id="categoryIcon" maxlength="8" placeholder="🛁" /></label>
+      <label>Beschreibung <span class="optional">optional</span><input id="categoryDescription" maxlength="160" placeholder="z. B. Pflege, Hygiene und Vorräte" /></label>
+      <p class="form-hint">Emoji, Name und Beschreibung können später jederzeit wieder geändert werden.</p>
       <div class="dialog-actions">
         <button id="cancelCategoryBtn" type="button" class="secondary-btn">Abbrechen</button>
         <button id="saveCategoryBtn" type="submit" value="default" class="primary-btn">Speichern</button>
@@ -104,6 +107,6 @@
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <script src="app.js?v=162"></script>
+  <script src="app.js?v=163"></script>
 </body>
 </html>

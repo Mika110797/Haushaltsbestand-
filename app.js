@@ -423,6 +423,7 @@
     const lowItems = scopedItems.filter(i => i.quantity <= i.min_quantity);
     const visibleCategories = activeLocation === 'all' ? [] : categoriesForLocation(activeLocation);
     const needsHomeSelection = activeLocation === 'all';
+    const selectedCategory = activeCategory !== 'all' && activeCategory !== 'favorites' ? categoryById(activeCategory) : null;
 
     main.innerHTML = `
       ${locationSwitcher()}
@@ -442,6 +443,7 @@
         <button class="category-chip ${activeCategory==='favorites'?'active':''}" data-cat="favorites">⭐ Favoriten</button>
         ${visibleCategories.map(c => `<button class="category-chip ${activeCategory===c.id?'active':''}" data-cat="${c.id}">${esc(c.icon || '📦')} ${esc(c.name)}</button>`).join('')}
       </div>
+      ${selectedCategory?.description ? `<div class="card" style="padding:10px 13px;margin-bottom:12px"><span class="item-meta">${esc(selectedCategory.description)}</span></div>` : ''}
       <div class="item-list">
         ${filtered.length ? filtered.map(itemCard).join('') : `<div class="card empty">Keine passenden Artikel gefunden.</div>`}
       </div>`;
@@ -863,9 +865,15 @@
                 <button class="small-btn add-cat-location" data-location="${location.id}" type="button">+ Kategorie</button>
               </div>
               ${locationCategories.length ? locationCategories.map(c => `
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #fde4ef">
-                  <span>${esc(c.icon || '📦')} ${esc(c.name)}</span>
-                  <button class="small-btn delete-cat" data-id="${c.id}" type="button">Löschen</button>
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #fde4ef">
+                  <div>
+                    <strong>${esc(c.icon || '📦')} ${esc(c.name)}</strong>
+                    ${c.description ? `<div class="item-meta">${esc(c.description)}</div>` : ''}
+                  </div>
+                  <div class="actions">
+                    <button class="small-btn edit-cat" data-id="${c.id}" type="button">Bearbeiten</button>
+                    <button class="small-btn delete-cat" data-id="${c.id}" type="button">Löschen</button>
+                  </div>
                 </div>`).join('') : '<p class="empty" style="padding:8px 0">Noch keine Kategorien.</p>'}
             </div>`;
         }).join('')}
@@ -914,6 +922,7 @@
       openCategoryDialog();
     });
     document.querySelectorAll('.restore-item').forEach(b => b.onclick = () => restoreDeletedItem(b.dataset.id));
+    document.querySelectorAll('.edit-cat').forEach(b => b.onclick = () => openCategoryDialog(categoryById(b.dataset.id)));
     document.querySelectorAll('.delete-cat').forEach(b => b.onclick = () => deleteCategory(b.dataset.id));
   }
 
@@ -933,6 +942,7 @@
       location_id: category.location_id,
       name: category.name,
       icon: category.icon || '📦',
+      description: category.description || null,
       created_at: category.created_at || null
     };
   }
@@ -965,7 +975,7 @@
 
       const backup = {
         format: 'haushaltsbestand-backup',
-        version: 2,
+        version: 3,
         exported_at: new Date().toISOString(),
         household_name: household.name,
         locations: locations.map(backupSafeLocation),
@@ -1067,7 +1077,8 @@
         household_id: household.id,
         location_id: mappedLocationId,
         name: String(category.name).trim().slice(0, 40),
-        icon: String(category.icon || '📦').slice(0, 8)
+        icon: String(category.icon || '📦').slice(0, 8),
+        description: category.description ? String(category.description).trim().slice(0, 160) : null
       };
     });
 
@@ -1128,13 +1139,19 @@ Vorhandene passende Kategorien und Artikel werden auf den Stand des Backups gese
     }
   }
 
-  function openCategoryDialog() {
-    if (activeLocation === 'all') {
+  function openCategoryDialog(category=null) {
+    if (!category && activeLocation === 'all') {
       toast('Bitte zuerst Vanessa oder Mika auswählen.');
       return;
     }
-    document.getElementById('categoryName').value = '';
-    document.getElementById('categoryIcon').value = '';
+
+    document.getElementById('categoryDialogTitle').textContent = category ? 'Kategorie bearbeiten' : 'Kategorie hinzufügen';
+    document.getElementById('categoryId').value = category?.id || '';
+    document.getElementById('categoryName').value = category?.name || '';
+    document.getElementById('categoryIcon').value = category?.icon || '';
+    document.getElementById('categoryDescription').value = category?.description || '';
+
+    if (category?.location_id) activeLocation = category.location_id;
     categoryDialog.showModal();
   }
 
@@ -1178,13 +1195,27 @@ Vorhandene passende Kategorien und Artikel werden auf den Stand des Backups gese
   categoryForm.addEventListener('submit', async (e) => {
     if (e.submitter?.value === 'cancel') return;
     e.preventDefault();
-    const name = document.getElementById('categoryName').value.trim();
-    const icon = document.getElementById('categoryIcon').value.trim() || '📦';
-    const { error } = await db.from('categories').insert({ household_id: household.id, location_id: activeLocation, name, icon });
-    if (error) return toast(error.message);
+
+    const id = document.getElementById('categoryId').value;
+    const payload = {
+      name: document.getElementById('categoryName').value.trim(),
+      icon: document.getElementById('categoryIcon').value.trim() || '📦',
+      description: document.getElementById('categoryDescription').value.trim() || null
+    };
+
+    const result = id
+      ? await db.from('categories').update(payload).eq('id', id)
+      : await db.from('categories').insert({
+          ...payload,
+          household_id: household.id,
+          location_id: activeLocation
+        });
+
+    if (result.error) return toast(result.error.message);
     categoryDialog.close();
     await loadData();
     renderApp();
+    toast(id ? 'Kategorie geändert.' : 'Kategorie angelegt.');
   });
 
   itemForm.addEventListener('submit', async (e) => {
